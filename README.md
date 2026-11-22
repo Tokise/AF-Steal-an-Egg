@@ -67,12 +67,12 @@ The original lightweight script designed for the native Roblox Windows desktop c
   "max_bite_wait_seconds": 24.0,
   "hotkeys": {
     "toggle": "F6",
-    "set_water_aim": "F5",
     "decrease_cast": "F1",
     "increase_cast": "F2",
     "calibrate_bar": "F3",
-    "inspect_pixel": "F4",
     "test_single": "F7",
+    "decrease_cooldown": "F9",
+    "increase_cooldown": "F10",
     "exit": "F8"
   }
 }
@@ -81,8 +81,8 @@ The original lightweight script designed for the native Roblox Windows desktop c
 ### Setup & Usage
 1. Open the Roblox Windows client and join **Steal an Egg**.
 2. Equip your fishing rod and stand at the pond dock.
-3. Hover your mouse over the purple pond and press **`F5`** to lock the Water Aim spot.
-4. Press **`F6`** to start auto-fishing. Press **`F6`** again to pause.
+3. Click **`[ 📍 Show Target Pins ]`** to place the Cyan Water Aim pin on the pond and Green Bar pin over the minigame area.
+4. Press **`F7`** to test 1 cycle, or **`F6`** to start auto-fishing. Press **`F6`** again to pause.
 
 ---
 
@@ -105,9 +105,14 @@ Introduced a standalone **CMD-style dark graphical dashboard** and **floating to
 - **Roblox:** Roblox Windows desktop app.
 
 ### Key Features & Controls
-- **Floating Visual Target Pins:**
-  - `[ 🎣 WATER AIM ]` (Cyan Pin): Drag directly onto the fishing pond.
-  - `[ 🎯 GREEN BAR ]` (Green Pin): Drag directly over the minigame bar.
+- **Automatic Screen & Roblox Window Detection:** Automatically identifies which physical monitor Roblox is placed on (including secondary portrait monitors like `1024x1280` with negative desktop coordinates) and updates the active screen badge with resolution and orientation.
+- **Manual Screen & Preset Selector:** Dropdown menu allowing you to choose between Auto-Detect, any detected physical monitor (`DISPLAY1`, `DISPLAY2`), or common resolution presets (`1024x1280 Portrait`, `1080x1920 Portrait Full HD`, `1920x1080 Landscape Full HD`, `1366x768 HD`, `2560x1440 2K`).
+- **One-Click Pin Centering (`[ 📍 Center Pins to Screen ]`):** Automatically positions the water aim (32% height) and green bar (91% height) to perfect game proportions for the selected display.
+- **Normalized Virtual Desktop Input:** Uses Win32 Virtual Desktop coordinate normalization (`MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_ABSOLUTE`) with viewport activation taps so casting and reeling 100% reliably trigger on secondary/portrait screens.
+- **Floating Visual Target Pins & Auto-Align:**
+  - `[ 📍 Show Target Pins ]`: Displays floating Cyan (Water Aim) and Green (Minigame Bar) pins.
+  - `[ 📐 Auto-Align Bar ]`: Placed directly below the Show Target Pins button to instantly align the bar target below the pond.
+- **Built-in Quick Guide Window (`[ 📖 HOW TO USE ]`):** One-click in-app reference window detailing mode selection, screen setup, pin placement, testing, and shortcuts.
 - **Dashboard Cards:** Live counters for Total Catches, Session Uptime, and Current Action status.
 - **Live Terminal:** Real-time color-coded logging of casts, bite detection latencies, and catches.
 - **Tuners:** On-screen `[-] / [+]` buttons to adjust Cast Hold (±0.05s) and Popup Wait (±0.5s).
@@ -220,9 +225,9 @@ The ultimate, production-grade automation setup. Runs Roblox inside **LDPlayer 9
 2. **Launch the Macro:**
    - Double-click **[StealAnEgg_AutoFish.exe](file:///f:/Documents/Coding/Scipts/StealAnEgg_AutoFish.exe)** (or run `start.bat`).
    - The top badge will show `[ ⚡ ADB: emulator-5554 ]` in green once connected.
-3. **Verify Targeting:**
-   - Click **`[ 🎯 Test Cast ]`**: Verifies that your fishing rod casts and lands right in the purple pond (center `640, 420`). Use the `[▲] [▼] [◀] [▶]` nudges if you wish to adjust the water aim.
-   - Click **`[ 🟢 Test Bar ]`**: Checks the detection zone. While idle at the pond, it reports `⚪ CLEAR: Ready to fish!`.
+3. **Place Pins & Test 1 Cycle:**
+   - Click **`[ 📍 Show Target Pins ]`** (or **`[ 📍 Center Pins to Screen ]`**) to position your targets.
+   - Click **`[ 🎯 TEST 1 CYCLE (F7) ]`**: Automatically hides pins and executes a single full cycle (cast hold -> bite watch -> rapid reeling) to verify your setup before starting continuous fishing.
 4. **Start Auto-Fishing:**
    - Press **`F6`** (or click **`▶ START`**).
    - Target pins auto-hide.

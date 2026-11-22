@@ -34,13 +34,26 @@ from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, scrolledtext
 
+# Enable Per-Monitor DPI Awareness
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 try:
     import mss
     HAS_MSS = True
 except ImportError:
     HAS_MSS = False
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 
 # Virtual key code mapping
 VK_MAP = {
@@ -49,11 +62,41 @@ VK_MAP = {
     "F9": 0x78, "F10": 0x79, "F11": 0x7A, "F12": 0x7B
 }
 
-MOUSEEVENTF_LEFTDOWN = 0x0002
-MOUSEEVENTF_LEFTUP   = 0x0004
-KEYEVENTF_KEYUP      = 0x0002
-VK_SPACE             = 0x20
-GA_ROOT              = 2
+MOUSEEVENTF_MOVE        = 0x0001
+MOUSEEVENTF_LEFTDOWN    = 0x0002
+MOUSEEVENTF_LEFTUP      = 0x0004
+MOUSEEVENTF_ABSOLUTE    = 0x8000
+MOUSEEVENTF_VIRTUALDESK = 0x4000
+KEYEVENTF_KEYUP         = 0x0002
+VK_SPACE                = 0x20
+GA_ROOT                 = 2
+
+SM_XVIRTUALSCREEN       = 76
+SM_YVIRTUALSCREEN       = 77
+SM_CXVIRTUALSCREEN      = 78
+SM_CYVIRTUALSCREEN      = 79
+
+ULONG_PTR = ctypes.c_ulonglong
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR)
+    ]
+
+class _INPUT_UNION(ctypes.Union):
+    _fields_ = [("mi", MOUSEINPUT)]
+
+class INPUT(ctypes.Structure):
+    _anonymous_ = ("_u",)
+    _fields_ = [
+        ("type", wintypes.DWORD),
+        ("_u", _INPUT_UNION)
+    ]
 
 class RECT(ctypes.Structure):
     _fields_ = [
@@ -75,18 +118,31 @@ class MONITORINFOEX(ctypes.Structure):
 class POINT(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
+# Configure Win32 Monitor API prototypes for 64-bit safety
+ctypes.windll.user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+ctypes.windll.user32.MonitorFromWindow.restype = wintypes.HMONITOR
+
+ctypes.windll.user32.MonitorFromPoint.argtypes = [POINT, wintypes.DWORD]
+ctypes.windll.user32.MonitorFromPoint.restype = wintypes.HMONITOR
+
+ctypes.windll.user32.MonitorFromRect.argtypes = [ctypes.POINTER(RECT), wintypes.DWORD]
+ctypes.windll.user32.MonitorFromRect.restype = wintypes.HMONITOR
+
+ctypes.windll.user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFOEX)]
+ctypes.windll.user32.GetMonitorInfoW.restype = wintypes.BOOL
+
 DEFAULT_CONFIG = {
-    "use_adb": True,
+    "use_adb": False,
     "adb_path": r"E:\LDPlayer\LDPlayer9\adb.exe",
     "adb_cast_x": 640,
     "adb_cast_y": 420,
     "adb_reel_x": 640,
     "adb_reel_y": 420,
-    "background_focus_swap": True,
-    "cast_aim_x": -495,
-    "cast_aim_y": 1003,
-    "calibrated_bar_x": -495,
-    "calibrated_bar_y": 1150,
+    "screen_selection": "🔍 Auto-Detect Screen (Roblox)",
+    "cast_aim_x": -473,
+    "cast_aim_y": 374,
+    "calibrated_bar_x": -567,
+    "calibrated_bar_y": 1174,
     "calibrated_color": [159, 204, 116],
     "cast_hold_duration": 1.05,
     "min_wait_before_bite": 1.8,
@@ -100,11 +156,9 @@ DEFAULT_CONFIG = {
     "anti_afk_interval_seconds": 120,
     "hotkeys": {
         "toggle": "F6",
-        "set_water_aim": "F5",
         "decrease_cast": "F1",
         "increase_cast": "F2",
         "calibrate_bar": "F3",
-        "inspect_pixel": "F4",
         "test_single": "F7",
         "decrease_cooldown": "F9",
         "increase_cooldown": "F10",
@@ -186,23 +240,36 @@ class ADBManager:
 
     def check_device(self):
         """Checks if emulator is detected by adb devices."""
+        if not self.adb_path or not os.path.exists(self.adb_path):
+            self.connected = False
+            return False
         try:
             startupinfo = None
             if os.name == "nt":
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = 0
-            res = subprocess.run([self.adb_path, "devices"], capture_output=True, text=True, startupinfo=startupinfo, timeout=4)
+            res = subprocess.run([self.adb_path, "devices"], capture_output=True, text=True, startupinfo=startupinfo, timeout=3)
             for line in res.stdout.splitlines():
-                if "emulator" in line or "127.0.0.1" in line:
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == "device" and ("emulator" in line or "127.0.0.1" in line):
+                    self.device_name = parts[0]
+                    self.connected = True
+                    return True
+            # Attempt connect if list is empty
+            conn_res = subprocess.run([self.adb_path, "connect", "127.0.0.1:5555"], capture_output=True, text=True, startupinfo=startupinfo, timeout=2)
+            if "connected to" in conn_res.stdout.lower():
+                res2 = subprocess.run([self.adb_path, "devices"], capture_output=True, text=True, startupinfo=startupinfo, timeout=2)
+                for line in res2.stdout.splitlines():
                     parts = line.split()
                     if len(parts) >= 2 and parts[1] == "device":
                         self.device_name = parts[0]
+                        self.connected = True
                         return True
-            # Attempt connect if list is empty
-            subprocess.run([self.adb_path, "connect", "127.0.0.1:5555"], capture_output=True, startupinfo=startupinfo, timeout=3)
-            return True
+            self.connected = False
+            return False
         except Exception:
+            self.connected = False
             return False
 
     def start_session(self):
@@ -321,8 +388,26 @@ DispatchPointer(1000, {1000 + hold_ms}, 1, {float(x)}, {float(y)}, 1.0, 1.0, 0, 
     def close(self):
         if self.process:
             try:
-                self.process.stdin.write("exit\n")
-                self.process.stdin.flush()
+                if self.process.stdin:
+                    try:
+                        self.process.stdin.write("exit\n")
+                        self.process.stdin.flush()
+                    except Exception:
+                        pass
+                    try:
+                        self.process.stdin.close()
+                    except Exception:
+                        pass
+                if self.process.stdout:
+                    try:
+                        self.process.stdout.close()
+                    except Exception:
+                        pass
+                if self.process.stderr:
+                    try:
+                        self.process.stderr.close()
+                    except Exception:
+                        pass
                 self.process.terminate()
             except Exception:
                 pass
@@ -372,18 +457,26 @@ def focus_window(hwnd):
         if cur_fg == hwnd:
             return True
 
+        if ctypes.windll.user32.IsIconic(hwnd):
+            ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+
         cur_thread = ctypes.windll.user32.GetWindowThreadProcessId(cur_fg, None)
         target_thread = ctypes.windll.user32.GetWindowThreadProcessId(hwnd, None)
+        my_thread = ctypes.windll.kernel32.GetCurrentThreadId()
 
-        if cur_thread != target_thread and cur_thread != 0:
-            ctypes.windll.user32.AttachThreadInput(cur_thread, target_thread, True)
-            ctypes.windll.user32.BringWindowToTop(hwnd)
-            ctypes.windll.user32.SetForegroundWindow(hwnd)
-            ctypes.windll.user32.AttachThreadInput(cur_thread, target_thread, False)
-        else:
-            ctypes.windll.user32.BringWindowToTop(hwnd)
-            ctypes.windll.user32.SetForegroundWindow(hwnd)
-        return True
+        for t in (cur_thread, my_thread):
+            if t != target_thread and t != 0:
+                ctypes.windll.user32.AttachThreadInput(t, target_thread, True)
+
+        ctypes.windll.user32.ShowWindow(hwnd, 5)  # SW_SHOW
+        ctypes.windll.user32.BringWindowToTop(hwnd)
+        ctypes.windll.user32.SetForegroundWindow(hwnd)
+
+        for t in (cur_thread, my_thread):
+            if t != target_thread and t != 0:
+                ctypes.windll.user32.AttachThreadInput(t, target_thread, False)
+
+        return ctypes.windll.user32.GetForegroundWindow() == hwnd
     except Exception:
         return False
 
@@ -504,25 +597,148 @@ def human_sleep(duration, jitter=0.015):
     return actual_delay
 
 
+def send_mouse_down_at(x, y):
+    vx = ctypes.windll.user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+    vy = ctypes.windll.user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+    vw = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CXVIRTUALSCREEN))
+    vh = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
+
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
+    norm_x = int((int(x) - vx) * 65535 / max(1, vw - 1))
+    norm_y = int((int(y) - vy) * 65535 / max(1, vh - 1))
+    flags = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+
+    try:
+        inp = INPUT()
+        inp.type = 0
+        inp.mi.dx = norm_x
+        inp.mi.dy = norm_y
+        inp.mi.dwFlags = flags
+        ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+    except Exception:
+        pass
+    ctypes.windll.user32.mouse_event(flags, norm_x, norm_y, 0, 0)
+
+
+def send_mouse_up_at(x, y):
+    vx = ctypes.windll.user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+    vy = ctypes.windll.user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+    vw = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CXVIRTUALSCREEN))
+    vh = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
+
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
+    norm_x = int((int(x) - vx) * 65535 / max(1, vw - 1))
+    norm_y = int((int(y) - vy) * 65535 / max(1, vh - 1))
+    flags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+
+    try:
+        inp = INPUT()
+        inp.type = 0
+        inp.mi.dx = norm_x
+        inp.mi.dy = norm_y
+        inp.mi.dwFlags = flags
+        ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+    except Exception:
+        pass
+    ctypes.windll.user32.mouse_event(flags, norm_x, norm_y, 0, 0)
+
+
+def mouse_click_at(x, y, hold_time=0.02):
+    send_mouse_down_at(x, y)
+    if hold_time > 0:
+        time.sleep(hold_time)
+    send_mouse_up_at(x, y)
+
+
 def mouse_down():
-    ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    x, y = get_cursor_pos()
+    send_mouse_down_at(x, y)
 
 
 def mouse_up():
-    ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    x, y = get_cursor_pos()
+    send_mouse_up_at(x, y)
 
 
 def mouse_click(hold_time=0.02):
-    mouse_down()
-    if hold_time > 0:
-        time.sleep(hold_time)
-    mouse_up()
+    x, y = get_cursor_pos()
+    mouse_click_at(x, y, hold_time=hold_time)
 
 
 def key_tap(vk_code):
     ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
     time.sleep(0.05)
     ctypes.windll.user32.keybd_event(vk_code, 0, KEYEVENTF_KEYUP, 0)
+
+
+def get_system_monitors():
+    monitors = []
+    def _cb(hmon, hdc, lprect, lparam):
+        mi = MONITORINFOEX()
+        mi.cbSize = ctypes.sizeof(MONITORINFOEX)
+        ctypes.windll.user32.GetMonitorInfoW(hmon, ctypes.byref(mi))
+        w = mi.rcMonitor.right - mi.rcMonitor.left
+        h = mi.rcMonitor.bottom - mi.rcMonitor.top
+        is_primary = bool(mi.dwFlags & 1)
+        orient = "Portrait" if h > w else "Landscape"
+        idx = len(monitors) + 1
+        dev_clean = mi.szDevice.split("\\")[-1] or f"DISPLAY{idx}"
+        primary_tag = ", Primary" if is_primary else ""
+        label = f"Monitor {idx}: {w}x{h} ({orient}{primary_tag}) [{dev_clean}]"
+        monitors.append({
+            "index": idx,
+            "handle": hmon,
+            "device": mi.szDevice,
+            "dev_name": dev_clean,
+            "left": mi.rcMonitor.left,
+            "top": mi.rcMonitor.top,
+            "right": mi.rcMonitor.right,
+            "bottom": mi.rcMonitor.bottom,
+            "width": w,
+            "height": h,
+            "is_primary": is_primary,
+            "orientation": orient,
+            "label": label
+        })
+        return True
+
+    MONITORENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HMONITOR, wintypes.HDC, ctypes.POINTER(RECT), wintypes.LPARAM)
+    ctypes.windll.user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(_cb), 0)
+    return monitors
+
+
+def detect_roblox_screen(roblox_hwnd=None):
+    monitors = get_system_monitors()
+    if not monitors:
+        return None, None, "No active monitors detected."
+
+    if roblox_hwnd:
+        if not ctypes.windll.user32.IsWindow(roblox_hwnd):
+            try:
+                hdesk = ctypes.windll.user32.OpenDesktopW("default", 0, False, 0x01FF)
+                if hdesk:
+                    ctypes.windll.user32.SetThreadDesktop(hdesk)
+            except Exception:
+                pass
+
+        if ctypes.windll.user32.IsWindow(roblox_hwnd):
+            r = RECT()
+            ctypes.windll.user32.GetWindowRect(roblox_hwnd, ctypes.byref(r))
+            hmon = ctypes.windll.user32.MonitorFromWindow(roblox_hwnd, 2)
+            for m in monitors:
+                if m["handle"] == hmon:
+                    return m, r, f"Roblox window detected on {m['label']}"
+            # Fallback to rect center intersection
+            cx = (r.left + r.right) // 2
+            cy = (r.top + r.bottom) // 2
+            for m in monitors:
+                if m["left"] <= cx < m["right"] and m["top"] <= cy < m["bottom"]:
+                    return m, r, f"Roblox window detected on {m['label']}"
+
+    for m in monitors:
+        if m["is_primary"]:
+            return m, None, f"Using Primary {m['label']} (Roblox not detected)"
+    return monitors[0], None, f"Using {monitors[0]['label']}"
 
 
 # =============================================================================
@@ -588,19 +804,20 @@ class AutoFishGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Steal an Egg - Auto-Fishing Command Console")
-        self.root.geometry("860x650")
+        self.root.geometry("860x700")
         self.root.configure(bg="#0c0d10")
-        self.root.minsize(780, 580)
+        self.root.minsize(780, 600)
 
         self.config = load_config()
         self.display = MultiMonitorManager()
         self.adb = ADBManager(self.config.get("adb_path"))
         self.log_queue = queue.Queue()
         self.roblox_hwnd = None
+        self.monitors_cache = []
+        self.active_monitor = None
 
         self.is_running = False
         self.test_mode = False
-        self.inspector_active = False
         self.should_exit = False
         self.total_catches = 0
         self.total_casts = 0
@@ -612,6 +829,7 @@ class AutoFishGUI:
         self.pins_visible = False
         self.aim_pin = None
         self.bar_pin = None
+        self.instructions_win = None
 
         # Build UI layout
         self._build_ui()
@@ -639,8 +857,9 @@ class AutoFishGUI:
         title_lbl = tk.Label(header, text="🎣 STEAL AN EGG — AUTO-FISHING COMMAND CONSOLE", fg="#58a6ff", bg="#161b22", font=("Consolas", 12, "bold"))
         title_lbl.pack(side="left", padx=12, pady=10)
 
-        self.adb_badge = tk.Label(header, text="[ ⚡ ADB: CONNECTING ]", fg="#e3b341", bg="#21262d", font=("Consolas", 9, "bold"), padx=8, pady=4)
-        self.adb_badge.pack(side="right", padx=(4, 12), pady=8)
+        self.mode_badge = tk.Label(header, text="[ 🖥️ MODE: DIRECT WINDOWS ]", fg="#58a6ff", bg="#21262d", font=("Consolas", 9, "bold"), padx=8, pady=4)
+        self.mode_badge.pack(side="right", padx=(4, 12), pady=8)
+        self.adb_badge = self.mode_badge
 
         self.status_badge = tk.Label(header, text="[ PAUSED ]", fg="#f85149", bg="#21262d", font=("Consolas", 10, "bold"), padx=10, pady=4)
         self.status_badge.pack(side="right", padx=4, pady=8)
@@ -658,15 +877,65 @@ class AutoFishGUI:
         self.action_card = self._create_card(stats_frame, "CURRENT ACTION", "Idle — Ready to Start", "#e3b341")
         self.action_card.pack(side="left", fill="both", expand=True, padx=(4, 0))
 
+        # 2b. Client Mode Selector Bar
+        mode_bar = tk.Frame(self.root, bg="#161b22", highlightbackground="#30363d", highlightthickness=1)
+        mode_bar.pack(fill="x", padx=14, pady=(2, 4))
+
+        tk.Label(mode_bar, text="CLIENT MODE:", fg="#8b949e", bg="#161b22", font=("Consolas", 8, "bold")).pack(side="left", padx=10, pady=6)
+
+        self.btn_mode_win = tk.Button(
+            mode_bar, text="🖥️ Plain Windows Mode (Roblox PC Client)",
+            font=("Consolas", 9, "bold"), bd=1, relief="solid", padx=12, pady=4,
+            command=lambda: self.switch_mode(False)
+        )
+        self.btn_mode_win.pack(side="left", padx=4, pady=4)
+
+        self.btn_mode_adb = tk.Button(
+            mode_bar, text="⚡ LDPlayer ADB Mode (Touch Injection)",
+            font=("Consolas", 9, "bold"), bd=1, relief="solid", padx=12, pady=4,
+            command=lambda: self.switch_mode(True)
+        )
+        self.btn_mode_adb.pack(side="left", padx=4, pady=4)
+
+        # 2c. Display & Screen Resolution Bar
+        screen_bar = tk.Frame(self.root, bg="#161b22", highlightbackground="#30363d", highlightthickness=1)
+        screen_bar.pack(fill="x", padx=14, pady=(2, 4))
+
+        tk.Label(screen_bar, text="SCREEN / MONITOR:", fg="#8b949e", bg="#161b22", font=("Consolas", 8, "bold")).pack(side="left", padx=10, pady=6)
+
+        self.screen_mode_var = tk.StringVar(value=self.config.get("screen_selection", "🔍 Auto-Detect Screen (Roblox)"))
+        self.screen_combo = ttk.Combobox(screen_bar, textvariable=self.screen_mode_var, state="readonly", width=38, font=("Consolas", 8))
+        self.screen_combo.pack(side="left", padx=4, pady=4)
+        self.screen_combo.bind("<<ComboboxSelected>>", self._on_screen_selected)
+
+        self.btn_detect_screen = tk.Button(
+            screen_bar, text="🔍 Detect Roblox Screen",
+            bg="#21262d", fg="#58a6ff", activebackground="#30363d", activeforeground="#58a6ff",
+            font=("Consolas", 8, "bold"), bd=1, relief="solid", padx=8, pady=2,
+            command=self.auto_detect_screen
+        )
+        self.btn_detect_screen.pack(side="left", padx=4, pady=4)
+
+        self.btn_center_pins = tk.Button(
+            screen_bar, text="📍 Center Pins to Screen",
+            bg="#21262d", fg="#39d353", activebackground="#30363d", activeforeground="#39d353",
+            font=("Consolas", 8), bd=1, relief="solid", padx=6, pady=2,
+            command=self.center_pins_for_current_screen
+        )
+        self.btn_center_pins.pack(side="left", padx=4, pady=4)
+
+        self.screen_badge = tk.Label(screen_bar, text="[ SCREEN: DETECTING... ]", fg="#39d353", bg="#21262d", font=("Consolas", 8, "bold"), padx=6, pady=3)
+        self.screen_badge.pack(side="right", padx=(4, 10), pady=4)
+
         # 3. Targets & Tuners Panel
         controls_panel = tk.Frame(self.root, bg="#161b22", highlightbackground="#30363d", highlightthickness=1)
-        controls_panel.pack(fill="x", padx=14, pady=6)
+        controls_panel.pack(fill="x", padx=14, pady=4)
 
-        # Row 1: Water Aim Controls (ADB Touch Coordinates + Arrow Nudges)
+        # Row 1: Water Aim Controls (Screen / ADB Coordinates + Arrow Nudges)
         row1 = tk.Frame(controls_panel, bg="#161b22")
         row1.pack(fill="x", padx=12, pady=(8, 4))
 
-        self.aim_coord_lbl = tk.Label(row1, text=f"Water Aim: X={self.config.get('adb_cast_x', 640)}, Y={self.config.get('adb_cast_y', 420)}", fg="#58a6ff", bg="#161b22", font=("Consolas", 9, "bold"))
+        self.aim_coord_lbl = tk.Label(row1, text="Water Aim: (960, 540)", fg="#58a6ff", bg="#161b22", font=("Consolas", 9, "bold"))
         self.aim_coord_lbl.pack(side="left", padx=(0, 8))
 
         aim_btn_box = tk.Frame(row1, bg="#161b22")
@@ -675,12 +944,11 @@ class AutoFishGUI:
         tk.Button(aim_btn_box, text="▼ Down", bg="#21262d", fg="#58a6ff", font=("Consolas", 8), command=lambda: self.adjust_aim_spot(0, +30)).pack(side="left", padx=1)
         tk.Button(aim_btn_box, text="◀ Left", bg="#21262d", fg="#58a6ff", font=("Consolas", 8), command=lambda: self.adjust_aim_spot(-30, 0)).pack(side="left", padx=1)
         tk.Button(aim_btn_box, text="▶ Right", bg="#21262d", fg="#58a6ff", font=("Consolas", 8), command=lambda: self.adjust_aim_spot(+30, 0)).pack(side="left", padx=1)
-        tk.Button(aim_btn_box, text="🎯 Test Cast", bg="#238636", fg="#ffffff", font=("Consolas", 8, "bold"), command=self.test_cast_only).pack(side="left", padx=(6, 0))
 
-        self.pin_toggle_btn = tk.Button(row1, text="📍 Show Target Pins", bg="#21262d", fg="#58a6ff", activebackground="#30363d", activeforeground="#58a6ff", font=("Consolas", 8, "bold"), bd=1, relief="solid", command=self.toggle_pins)
+        self.pin_toggle_btn = tk.Button(row1, text="📍 Show Target Pins", bg="#21262d", fg="#58a6ff", activebackground="#30363d", activeforeground="#58a6ff", font=("Consolas", 8, "bold"), bd=1, relief="solid", width=22, command=self.toggle_pins)
         self.pin_toggle_btn.pack(side="right")
 
-        # Row 2: Green Bar Controls (Coordinates + Arrow Nudges + Test Button + Auto-Align)
+        # Row 2: Green Bar Controls (Coordinates + Arrow Nudges)
         row2 = tk.Frame(controls_panel, bg="#161b22")
         row2.pack(fill="x", padx=12, pady=4)
 
@@ -693,10 +961,11 @@ class AutoFishGUI:
         tk.Button(bar_btn_box, text="▼ Down", bg="#21262d", fg="#39d353", font=("Consolas", 8), command=lambda: self.adjust_bar_spot(0, +25)).pack(side="left", padx=1)
         tk.Button(bar_btn_box, text="◀ Left", bg="#21262d", fg="#39d353", font=("Consolas", 8), command=lambda: self.adjust_bar_spot(-25, 0)).pack(side="left", padx=1)
         tk.Button(bar_btn_box, text="▶ Right", bg="#21262d", fg="#39d353", font=("Consolas", 8), command=lambda: self.adjust_bar_spot(+25, 0)).pack(side="left", padx=1)
-        tk.Button(bar_btn_box, text="🟢 Test Bar", bg="#1f6feb", fg="#ffffff", font=("Consolas", 8, "bold"), command=self.test_bar_target).pack(side="left", padx=(6, 2))
-        tk.Button(bar_btn_box, text="📐 Auto-Align Bar", bg="#21262d", fg="#39d353", font=("Consolas", 8), command=self.auto_align_bar).pack(side="left", padx=2)
 
-        # Row 3: Tuners (Cast Hold & Cooldown) + ADB Mode Checkbox
+        self.btn_auto_align = tk.Button(row2, text="📐 Auto-Align Bar", bg="#21262d", fg="#39d353", activebackground="#30363d", activeforeground="#39d353", font=("Consolas", 8, "bold"), bd=1, relief="solid", width=22, command=self.auto_align_bar)
+        self.btn_auto_align.pack(side="right")
+
+        # Row 3: Tuners (Cast Hold & Cooldown)
         row3 = tk.Frame(controls_panel, bg="#161b22")
         row3.pack(fill="x", padx=12, pady=(4, 8))
 
@@ -718,13 +987,6 @@ class AutoFishGUI:
         self.cd_val_lbl.pack(side="left")
         tk.Button(cd_box, text="+", bg="#21262d", fg="#fff", width=2, command=lambda: self.adjust_cooldown(+0.5)).pack(side="left")
 
-        # LDPlayer ADB mode checkbox
-        self.adb_var = tk.BooleanVar(value=self.config.get("use_adb", True))
-        adb_check = tk.Checkbutton(row3, text="⚡ LDPlayer (ADB No-Mouse-Jump)", variable=self.adb_var, command=self._on_adb_toggle, bg="#161b22", fg="#39d353", selectcolor="#0d1117", activebackground="#161b22", activeforeground="#39d353", font=("Consolas", 9, "bold"))
-        adb_check.pack(side="right")
-        adb_check = tk.Checkbutton(row2, text="⚡ LDPlayer (ADB No-Mouse-Jump)", variable=self.adb_var, command=self._on_adb_toggle, bg="#161b22", fg="#39d353", selectcolor="#0d1117", activebackground="#161b22", activeforeground="#39d353", font=("Consolas", 9, "bold"))
-        adb_check.pack(side="right")
-
         # 4. Action Buttons Bar
         btn_bar = tk.Frame(self.root, bg="#0c0d10")
         btn_bar.pack(fill="x", padx=14, pady=4)
@@ -735,11 +997,8 @@ class AutoFishGUI:
         self.test_btn = tk.Button(btn_bar, text="🎯 TEST 1 CYCLE (F7)", bg="#21262d", fg="#c9d1d9", activebackground="#30363d", activeforeground="#ffffff", font=("Consolas", 9, "bold"), bd=1, relief="solid", padx=10, pady=6, command=self.run_test)
         self.test_btn.pack(side="left", padx=4)
 
-        self.aim_btn = tk.Button(btn_bar, text="🎣 SET AIM (F5)", bg="#21262d", fg="#58a6ff", activebackground="#30363d", activeforeground="#ffffff", font=("Consolas", 9, "bold"), bd=1, relief="solid", padx=10, pady=6, command=self.set_aim_spot)
-        self.aim_btn.pack(side="left", padx=4)
-
-        self.inspect_btn = tk.Button(btn_bar, text="🔍 INSPECTOR (F4)", bg="#21262d", fg="#c9d1d9", activebackground="#30363d", activeforeground="#ffffff", font=("Consolas", 9, "bold"), bd=1, relief="solid", padx=10, pady=6, command=self.toggle_inspector)
-        self.inspect_btn.pack(side="left", padx=4)
+        self.guide_btn = tk.Button(btn_bar, text="📖 HOW TO USE", bg="#21262d", fg="#58a6ff", activebackground="#30363d", activeforeground="#ffffff", font=("Consolas", 9, "bold"), bd=1, relief="solid", padx=10, pady=6, command=self.show_instructions)
+        self.guide_btn.pack(side="left", padx=4)
 
         clear_btn = tk.Button(btn_bar, text="CLEAR LOGS", bg="#0c0d10", fg="#8b949e", activebackground="#161b22", activeforeground="#c9d1d9", font=("Consolas", 8), bd=0, command=self.clear_logs)
         clear_btn.pack(side="right", padx=(4, 0))
@@ -760,11 +1019,15 @@ class AutoFishGUI:
         self.log_text.tag_config("MAGENTA", foreground="#d2a8ff")
 
         self.log("[SYSTEM] Auto-Fisher GUI initialized. Ready to fish.")
-        if self.adb_var.get():
+        self._update_mode_ui()
+        self._update_aim_label()
+        self._populate_screen_options()
+        self.root.after(200, lambda: self.auto_detect_screen(quiet=False))
+        if self.config.get("use_adb", False):
             self.log("[MODE] ⚡ LDPlayer ADB Mode ACTIVE (Monkey Engine Touch Injection)", "SUCCESS")
         else:
-            self.log("[MODE] Direct Windows Mode active.", "INFO")
-        self.log(f"[SETUP] Water Aim touch: ({self.config.get('adb_cast_x')}, {self.config.get('adb_cast_y')}) | Bar Target at ({self.config.get('calibrated_bar_x')}, {self.config.get('calibrated_bar_y')})")
+            self.log("[MODE] 🖥️ Plain Windows Mode ACTIVE (Roblox PC Client - Mouse Events)", "INFO")
+        self.log(f"[SETUP] Screen Aim: ({self.config.get('cast_aim_x', 960)}, {self.config.get('cast_aim_y', 540)}) | Bar Target: ({self.config.get('calibrated_bar_x', 960)}, {self.config.get('calibrated_bar_y', 720)})")
 
     def _create_card(self, parent, title, val, color):
         frame = tk.Frame(parent, bg="#161b22", highlightbackground="#30363d", highlightthickness=1)
@@ -797,11 +1060,14 @@ class AutoFishGUI:
 
     def _check_adb_status(self):
         def check():
+            if not self.config.get("use_adb", False):
+                return
             connected = self.adb.check_device()
-            if connected:
-                self.adb_badge.config(text=f"[ ⚡ ADB: {self.adb.device_name} ]", fg="#39d353")
-            else:
-                self.adb_badge.config(text="[ ⚡ ADB: DISCONNECTED ]", fg="#f85149")
+            if self.config.get("use_adb", False):
+                if connected:
+                    self.mode_badge.config(text=f"[ ⚡ ADB: {self.adb.device_name} ]", fg="#39d353")
+                else:
+                    self.mode_badge.config(text="[ ⚡ ADB: DISCONNECTED ]", fg="#f85149")
         threading.Thread(target=check, daemon=True).start()
         self.root.after(8000, self._check_adb_status)
 
@@ -809,34 +1075,207 @@ class AutoFishGUI:
         self.log_text.delete("1.0", "end")
 
     # =========================================================================
+    # Mode Switcher & Coordinate Labels
+    # =========================================================================
+    def switch_mode(self, use_adb):
+        self.config["use_adb"] = bool(use_adb)
+        save_config(self.config)
+        self._update_mode_ui()
+        self._update_aim_label()
+        if self.pins_visible and self.aim_pin:
+            x = self.config.get("cast_aim_x", 960)
+            y = self.config.get("cast_aim_y", 540)
+            self.aim_pin.update_coords(x, y)
+        if use_adb:
+            self.log("[MODE] ⚡ Switched to LDPlayer ADB Mode (Touch Injection).", "SUCCESS")
+            def check_now():
+                connected = self.adb.check_device()
+                if self.config.get("use_adb", False):
+                    if connected:
+                        self.mode_badge.config(text=f"[ ⚡ ADB: {self.adb.device_name} ]", fg="#39d353")
+                    else:
+                        self.mode_badge.config(text="[ ⚡ ADB: DISCONNECTED ]", fg="#f85149")
+            threading.Thread(target=check_now, daemon=True).start()
+        else:
+            self.log("[MODE] 🖥️ Switched to Plain Windows Mode (Roblox PC Client - Mouse Events).", "INFO")
+            self.mode_badge.config(text="[ 🖥️ MODE: DIRECT WINDOWS ]", fg="#58a6ff")
+
+    def _update_mode_ui(self):
+        use_adb = self.config.get("use_adb", False)
+        if use_adb:
+            self.btn_mode_adb.config(bg="#238636", fg="#ffffff", activebackground="#2ea043", activeforeground="#ffffff")
+            self.btn_mode_win.config(bg="#21262d", fg="#8b949e", activebackground="#30363d", activeforeground="#c9d1d9")
+            if self.adb.connected:
+                self.mode_badge.config(text=f"[ ⚡ ADB: {self.adb.device_name} ]", fg="#39d353")
+            else:
+                self.mode_badge.config(text="[ ⚡ ADB: CONNECTING ]", fg="#e3b341")
+        else:
+            self.btn_mode_win.config(bg="#1f6feb", fg="#ffffff", activebackground="#388bfd", activeforeground="#ffffff")
+            self.btn_mode_adb.config(bg="#21262d", fg="#8b949e", activebackground="#30363d", activeforeground="#c9d1d9")
+            self.mode_badge.config(text="[ 🖥️ MODE: DIRECT WINDOWS ]", fg="#58a6ff")
+
+    def _update_aim_label(self):
+        if self.config.get("use_adb", False):
+            ax = self.config.get("adb_cast_x", 640)
+            ay = self.config.get("adb_cast_y", 420)
+            self.aim_coord_lbl.config(text=f"Water Aim (ADB): ({ax}, {ay})")
+        else:
+            wx = self.config.get("cast_aim_x", 960)
+            wy = self.config.get("cast_aim_y", 540)
+            self.aim_coord_lbl.config(text=f"Water Aim (Screen): ({wx}, {wy})")
+
+    # =========================================================================
+    # Screen & Display Management (Multi-Monitor & Portrait Support)
+    # =========================================================================
+    def _populate_screen_options(self):
+        monitors = get_system_monitors()
+        self.monitors_cache = monitors
+        options = ["🔍 Auto-Detect Screen (Roblox)"]
+        for m in monitors:
+            options.append(m["label"])
+        options.extend([
+            "Preset: 1024x1280 (Portrait Secondary)",
+            "Preset: 1080x1920 (Portrait Full HD)",
+            "Preset: 1920x1080 (Landscape Full HD)",
+            "Preset: 1366x768 (Landscape HD)",
+            "Preset: 2560x1440 (2K QHD)"
+        ])
+        self.screen_combo["values"] = options
+        saved = self.config.get("screen_selection")
+        if saved and saved in options:
+            self.screen_mode_var.set(saved)
+        else:
+            self.screen_mode_var.set(options[0])
+
+    def auto_detect_screen(self, quiet=False):
+        r_hwnd = self.get_roblox_hwnd()
+        mon, rect, msg = detect_roblox_screen(r_hwnd)
+        if mon:
+            self.active_monitor = mon
+            dev_name = mon.get("dev_name") or mon["device"].split("\\")[-1]
+            badge_text = f"[ 🖥️ {mon['width']}x{mon['height']} {mon['orientation']} • {dev_name} ]"
+            self.screen_badge.config(text=badge_text, fg="#39d353")
+            self.config["detected_screen_width"] = mon["width"]
+            self.config["detected_screen_height"] = mon["height"]
+            self.config["detected_screen_orientation"] = mon["orientation"]
+            self.config["detected_screen_device"] = mon["device"]
+            save_config(self.config)
+            if not quiet:
+                self.log(f"[SCREEN] {msg}", "SUCCESS")
+                if rect:
+                    w = rect.right - rect.left
+                    h = rect.bottom - rect.top
+                    self.log(f"  └─ Roblox Rect: ({rect.left}, {rect.top}) to ({rect.right}, {rect.bottom}) | Window Size: {w}x{h}", "INFO")
+        else:
+            self.screen_badge.config(text="[ SCREEN: UNKNOWN ]", fg="#f85149")
+            if not quiet:
+                self.log(f"[SCREEN] {msg}", "WARN")
+
+    def _on_screen_selected(self, event=None):
+        sel = self.screen_mode_var.get()
+        self.config["screen_selection"] = sel
+        save_config(self.config)
+        if "Auto-Detect" in sel:
+            self.auto_detect_screen()
+            return
+        for m in getattr(self, "monitors_cache", []):
+            if m["label"] == sel:
+                self.active_monitor = m
+                dev_name = m.get("dev_name") or m["device"].split("\\")[-1]
+                badge_text = f"[ 🖥️ {m['width']}x{m['height']} {m['orientation']} • {dev_name} ]"
+                self.screen_badge.config(text=badge_text, fg="#58a6ff")
+                self.log(f"[SCREEN] Switched to {sel}", "INFO")
+                return
+        presets = {
+            "1024x1280": (1024, 1280, "Portrait"),
+            "1080x1920": (1080, 1920, "Portrait"),
+            "1920x1080": (1920, 1080, "Landscape"),
+            "1366x768":  (1366, 768,  "Landscape"),
+            "2560x1440": (2560, 1440, "Landscape"),
+        }
+        for k, (w, h, orient) in presets.items():
+            if k in sel:
+                badge_text = f"[ 🖥️ {w}x{h} {orient} Preset ]"
+                self.screen_badge.config(text=badge_text, fg="#e3b341")
+                self.log(f"[SCREEN] Selected Preset: {w}x{h} ({orient})", "INFO")
+                return
+
+    def center_pins_for_current_screen(self):
+        mon = getattr(self, "active_monitor", None)
+        if not mon:
+            r_hwnd = self.get_roblox_hwnd()
+            mon, _, _ = detect_roblox_screen(r_hwnd)
+
+        if mon:
+            left, top, w, h = mon["left"], mon["top"], mon["width"], mon["height"]
+        else:
+            sel = self.screen_mode_var.get()
+            if "1024x1280" in sel:
+                left, top, w, h = -1024, 8, 1024, 1280
+            elif "1080x1920" in sel:
+                left, top, w, h = 0, 0, 1080, 1920
+            elif "1920x1080" in sel:
+                left, top, w, h = 0, 0, 1920, 1080
+            else:
+                left, top, w, h = 0, 0, 1366, 768
+
+        new_aim_x = left + int(w * 0.50)
+        new_aim_y = top + int(h * 0.32)
+        new_bar_x = left + int(w * 0.50)
+        new_bar_y = top + int(h * 0.91)
+
+        self.config["cast_aim_x"] = new_aim_x
+        self.config["cast_aim_y"] = new_aim_y
+        self.config["calibrated_bar_x"] = new_bar_x
+        self.config["calibrated_bar_y"] = new_bar_y
+        save_config(self.config)
+
+        self._update_aim_label()
+        self.bar_coord_lbl.config(text=f"Green Bar: ({new_bar_x}, {new_bar_y})")
+        if self.aim_pin:
+            self.aim_pin.update_coords(new_aim_x, new_aim_y)
+        if self.bar_pin:
+            self.bar_pin.update_coords(new_bar_x, new_bar_y)
+
+        self.log(f"[PINS] Centered pins for {w}x{h} -> Water Aim: ({new_aim_x}, {new_aim_y}), Green Bar: ({new_bar_x}, {new_bar_y})", "SUCCESS")
+        try:
+            winsound.Beep(1300, 100)
+        except Exception:
+            pass
+
+    # =========================================================================
     # Aim Spot Adjustment & Test
     # =========================================================================
     def adjust_aim_spot(self, dx, dy):
-        cur_x = self.config.get("adb_cast_x", 640)
-        cur_y = self.config.get("adb_cast_y", 420)
-        new_x = max(50, min(1230, cur_x + dx))
-        new_y = max(50, min(670, cur_y + dy))
-        self.config["adb_cast_x"] = new_x
-        self.config["adb_cast_y"] = new_y
-        self.config["adb_reel_x"] = new_x
-        self.config["adb_reel_y"] = new_y
-        save_config(self.config)
-        self.aim_coord_lbl.config(text=f"Water Aim: X={new_x}, Y={new_y}")
-        self.log(f"[AIM] Water Aim adjusted to X={new_x}, Y={new_y}", "INFO")
-
-    def test_cast_only(self):
-        def cast_worker():
-            x = self.config.get("adb_cast_x", 640)
-            y = self.config.get("adb_cast_y", 420)
-            dur = self.config.get("cast_hold_duration", 1.05)
-            self.log(f"[TEST CAST] Firing test cast ({dur:.2f}s) at ({x}, {y})...", "WARN")
-            self.adb.cast_hold(x, y, duration=dur)
-            self.log("[TEST CAST] Test cast completed! Check where your bobber landed.", "SUCCESS")
-        threading.Thread(target=cast_worker, daemon=True).start()
+        use_adb = self.config.get("use_adb", False)
+        if use_adb:
+            cur_x = self.config.get("adb_cast_x", 640)
+            cur_y = self.config.get("adb_cast_y", 420)
+            new_x = max(50, min(1230, cur_x + dx))
+            new_y = max(50, min(670, cur_y + dy))
+            self.config["adb_cast_x"] = new_x
+            self.config["adb_cast_y"] = new_y
+            self.config["adb_reel_x"] = new_x
+            self.config["adb_reel_y"] = new_y
+            save_config(self.config)
+            self._update_aim_label()
+            self.log(f"[AIM] Water Aim (ADB) adjusted to ({new_x}, {new_y})", "INFO")
+        else:
+            cur_x = self.config.get("cast_aim_x", 960)
+            cur_y = self.config.get("cast_aim_y", 540)
+            new_x = cur_x + dx
+            new_y = cur_y + dy
+            self.config["cast_aim_x"] = new_x
+            self.config["cast_aim_y"] = new_y
+            save_config(self.config)
+            self._update_aim_label()
+            if self.aim_pin:
+                self.aim_pin.update_coords(new_x, new_y)
+            self.log(f"[AIM] Water Aim (Screen) adjusted to ({new_x}, {new_y})", "INFO")
 
     def adjust_bar_spot(self, dx, dy):
-        cur_x = self.config.get("calibrated_bar_x", -495)
-        cur_y = self.config.get("calibrated_bar_y", 1150)
+        cur_x = self.config.get("calibrated_bar_x", 960)
+        cur_y = self.config.get("calibrated_bar_y", 720)
         new_x = cur_x + dx
         new_y = cur_y + dy
         self.config["calibrated_bar_x"] = new_x
@@ -847,40 +1286,16 @@ class AutoFishGUI:
             self.bar_pin.update_coords(new_x, new_y)
         self.log(f"[BAR] Green Bar target moved to ({new_x}, {new_y})", "INFO")
 
-    def test_bar_target(self):
-        calib_x = self.config.get("calibrated_bar_x")
-        calib_y = self.config.get("calibrated_bar_y")
-        if calib_x is None or calib_y is None:
-            self.log("[BAR TEST] Bar target not set!", "ERROR")
-            return
-
-        col = self.display.get_pixel(calib_x, calib_y)
-        is_active = self.check_minigame_active()
-        if col:
-            r, g, b = col
-            matched, tag = is_green_or_stop(r, g, b)
-            if is_active:
-                self.log(f"[BAR TEST] 🟢 MATCH! Green Bar DETECTED at ({calib_x}, {calib_y}) RGB({r},{g},{b})", "SUCCESS")
-                try:
-                    winsound.Beep(1800, 150)
-                except Exception:
-                    pass
-            else:
-                self.log(f"[BAR TEST] ⚪ CLEAR: Center pixel is RGB({r},{g},{b}) (No green bar). Ready to fish!", "INFO")
-                try:
-                    winsound.Beep(1000, 100)
-                except Exception:
-                    pass
-        else:
-            self.log(f"[BAR TEST] ⚠️ Could not read pixel at ({calib_x}, {calib_y}). Check monitor.", "WARN")
-
     def auto_align_bar(self):
-        aim_x = self.config.get("cast_aim_x", -495)
-        aim_y = self.config.get("cast_aim_y", 1003)
-        # The green bar in Steal an Egg is horizontally centered with the water aim
-        # and sits approximately 140-160 pixels lower on typical resolutions.
-        new_bar_x = aim_x
-        new_bar_y = aim_y + 150
+        aim_x = self.config.get("cast_aim_x", 960)
+        aim_y = self.config.get("cast_aim_y", 540)
+        mon = getattr(self, "active_monitor", None)
+        if mon and mon.get("orientation") == "Portrait":
+            new_bar_x = aim_x
+            new_bar_y = mon.get("top", 0) + int(mon.get("height", 1280) * 0.91)
+        else:
+            new_bar_x = aim_x
+            new_bar_y = aim_y + 160
         self.config["calibrated_bar_x"] = new_bar_x
         self.config["calibrated_bar_y"] = new_bar_y
         save_config(self.config)
@@ -901,13 +1316,13 @@ class AutoFishGUI:
         if self.pins_visible:
             self.pin_toggle_btn.config(text="📍 Hide Target Pins", bg="#58a6ff", fg="#0d1117")
             # 1. Aim Pin
-            aim_x = self.config.get("cast_aim_x", -495)
-            aim_y = self.config.get("cast_aim_y", 1003)
+            aim_x = self.config.get("cast_aim_x", 960)
+            aim_y = self.config.get("cast_aim_y", 540)
             self.aim_pin = DraggablePin(self.root, "🎣 WATER AIM", aim_x, aim_y, "#58a6ff", on_moved=self._on_aim_moved)
 
             # 2. Bar Pin
-            bar_x = self.config.get("calibrated_bar_x", -495)
-            bar_y = self.config.get("calibrated_bar_y", 1150)
+            bar_x = self.config.get("calibrated_bar_x", 960)
+            bar_y = self.config.get("calibrated_bar_y", 720)
             self.bar_pin = DraggablePin(self.root, "🎯 GREEN BAR", bar_x, bar_y, "#39d353", on_moved=self._on_bar_moved)
             self.log("[PINS] Target pins shown! Drag the green pin directly over Roblox's minigame bar.", "INFO")
         else:
@@ -940,15 +1355,17 @@ class AutoFishGUI:
                 self.log(f"[AIM] Pin auto-mapped to LDPlayer touch: X={self.config['adb_cast_x']}, Y={self.config['adb_cast_y']}", "SUCCESS")
 
         save_config(self.config)
-        self.aim_coord_lbl.config(text=f"Water Aim: X={self.config.get('adb_cast_x', 640)}, Y={self.config.get('adb_cast_y', 420)}")
+        self._update_aim_label()
         try:
             winsound.Beep(1200, 80)
         except Exception:
             pass
 
     def _on_bar_moved(self, x, y):
-        self.config["calibrated_bar_x"] = x
-        self.config["calibrated_bar_y"] = y
+        self.config["calibrated_bar_x"] = int(x)
+        self.config["calibrated_bar_y"] = int(y)
+        save_config(self.config)
+        self.bar_coord_lbl.config(text=f"Green Bar: ({int(x)}, {int(y)})")
         col = self.display.get_pixel(x, y)
         if col:
             matched, tag = is_green_or_stop(*col)
@@ -957,21 +1374,11 @@ class AutoFishGUI:
                 self.log(f"[BAR] Green Bar target locked to ({x}, {y}) with active color RGB{tuple(col)}", "SUCCESS")
             else:
                 self.log(f"[BAR] Target pin moved to ({x}, {y}). Will trigger when bright lime-green bar appears here.", "INFO")
-        save_config(self.config)
-        self.bar_coord_lbl.config(text=f"Green Bar: ({x}, {y})")
         try:
             winsound.Beep(1500, 100)
         except Exception:
             pass
 
-    def _on_adb_toggle(self):
-        val = self.adb_var.get()
-        self.config["use_adb"] = val
-        save_config(self.config)
-        if val:
-            self.log("[CONFIG] ⚡ LDPlayer ADB Mode ENABLED: Zero Windows mouse movement active!", "SUCCESS")
-        else:
-            self.log("[CONFIG] Switched to Direct Windows Mode (physical mouse events).", "WARN")
 
     # =========================================================================
     # Controls & Tuners
@@ -1005,22 +1412,31 @@ class AutoFishGUI:
 
     def run_test(self):
         if not self.is_running and not self.test_mode:
+            # Auto-hide pins immediately on UI thread so clicks & pixel detection reach the game window
+            if self.pins_visible:
+                self.toggle_pins()
             threading.Thread(target=self._run_single_test_worker, daemon=True).start()
 
     def _run_single_test_worker(self):
-        self.test_mode = True
-        self.log("[TEST] Testing 1 full fishing cycle...", "WARN")
-        start = time.time()
-        self.do_fishing_cycle()
-        total_time = time.time() - start
-        self.test_mode = False
-        self.log(f"[TEST] Test cycle finished in {total_time:.2f}s!", "SUCCESS")
+        with self.lock:
+            self.test_mode = True
 
-    def set_aim_spot(self):
-        x, y = get_cursor_pos()
-        self._on_aim_moved(x, y)
-        if self.aim_pin:
-            self.aim_pin.update_coords(x, y)
+        self.root.after(0, lambda: self.status_badge.config(text="[ TESTING 1 CYCLE ]", fg="#e3b341", bg="#161b22"))
+        self.root.after(0, lambda: self.test_btn.config(text="⏳ TESTING...", bg="#da3633", fg="#ffffff"))
+        self.log(">>> [TEST] Starting 1 full fishing cycle test (Throw -> Bite Watch -> Reel)...", "WARN")
+        try:
+            start = time.time()
+            self.do_fishing_cycle()
+            total_time = time.time() - start
+            self.log(f">>> [TEST] Test cycle finished in {total_time:.2f}s!", "SUCCESS")
+        except Exception as e:
+            self.log(f">>> [TEST] Test cycle error: {e}", "ERROR")
+        finally:
+            with self.lock:
+                self.test_mode = False
+            self.root.after(0, lambda: self.status_badge.config(text="[ PAUSED ]", fg="#f85149", bg="#21262d"))
+            self.root.after(0, lambda: self.test_btn.config(text="🎯 TEST 1 CYCLE (F7)", bg="#21262d", fg="#c9d1d9"))
+            self.root.after(0, lambda: self.action_card.val_lbl.config(text="Idle — Ready to Start", fg="#e3b341"))
 
     def adjust_cast_time(self, delta):
         cur = self.config.get("cast_hold_duration", 1.05)
@@ -1046,27 +1462,114 @@ class AutoFishGUI:
         except Exception:
             pass
 
-    def toggle_inspector(self):
-        self.inspector_active = not self.inspector_active
-        if self.inspector_active:
-            self.inspect_btn.config(bg="#58a6ff", fg="#0d1117")
-            self.log("[INSPECTOR] Inspector ACTIVE. Move mouse over game.", "WARN")
-            threading.Thread(target=self._inspector_worker, daemon=True).start()
-        else:
-            self.inspect_btn.config(bg="#21262d", fg="#c9d1d9")
-            self.log("[INSPECTOR] Inspector STOPPED.", "INFO")
+    def show_instructions(self):
+        if self.instructions_win and self.instructions_win.winfo_exists():
+            self.instructions_win.lift()
+            self.instructions_win.focus_force()
+            return
 
-    def _inspector_worker(self):
-        while self.inspector_active and not self.should_exit:
-            x, y = get_cursor_pos()
-            col = self.display.get_pixel(x, y)
-            if col:
-                matched, label = is_green_or_stop(*col)
-                tag = f"MATCH: {label}" if matched else "No Match"
-                self.action_card.val_lbl.config(text=f"({x}, {y}) RGB{col} [{tag}]", fg="#39d353" if matched else "#58a6ff")
-            time.sleep(0.15)
-        if not self.is_running:
-            self.action_card.val_lbl.config(text="Idle — Ready to Start", fg="#e3b341")
+        win = tk.Toplevel(self.root)
+        self.instructions_win = win
+        win.title("📖 How to Use — Auto-Fisher Quick Guide")
+        win.geometry("540x510")
+        win.configure(bg="#0c0d10")
+        win.resizable(False, False)
+        win.attributes("-topmost", True)
+
+        try:
+            self.root.update_idletasks()
+            rx = self.root.winfo_x()
+            ry = self.root.winfo_y()
+            rw = self.root.winfo_width()
+            rh = self.root.winfo_height()
+            x = max(0, rx + (rw - 540) // 2)
+            y = max(0, ry + (rh - 510) // 2)
+            win.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+        hdr = tk.Frame(win, bg="#161b22", highlightbackground="#30363d", highlightthickness=1)
+        hdr.pack(fill="x", padx=12, pady=(12, 6))
+        tk.Label(hdr, text="🎣 QUICK START & INSTRUCTION GUIDE", fg="#58a6ff", bg="#161b22", font=("Consolas", 10, "bold")).pack(side="left", padx=10, pady=8)
+
+        content_frame = tk.Frame(win, bg="#0d1117", highlightbackground="#30363d", highlightthickness=1)
+        content_frame.pack(fill="both", expand=True, padx=12, pady=6)
+
+        txt = scrolledtext.ScrolledText(content_frame, bg="#0d1117", fg="#c9d1d9", font=("Consolas", 9), bd=0, relief="flat", wrap="word")
+        txt.pack(fill="both", expand=True, padx=8, pady=8)
+
+        txt.tag_config("HEADER", foreground="#58a6ff", font=("Consolas", 9, "bold"))
+        txt.tag_config("STEP", foreground="#39d353", font=("Consolas", 9, "bold"))
+        txt.tag_config("KEY", foreground="#e3b341", font=("Consolas", 9, "bold"))
+        txt.tag_config("BODY", foreground="#c9d1d9")
+
+        instructions = [
+            ("STEP 1: SELECT CLIENT MODE", "HEADER"),
+            ("\n• ", "BODY"),
+            ("🖥️ Plain Windows Mode:", "STEP"),
+            (" For standard Roblox PC desktop client.\n• ", "BODY"),
+            ("⚡ LDPlayer ADB Mode:", "STEP"),
+            (" For LDPlayer emulator (100% background, zero mouse movement).\n\n", "BODY"),
+
+            ("STEP 2: SCREEN / MONITOR SETUP", "HEADER"),
+            ("\n• Click ", "BODY"),
+            ("[ 🔍 Detect Roblox Screen ]", "KEY"),
+            (" to auto-detect the screen Roblox is running on (Landscape or Portrait).\n• Click ", "BODY"),
+            ("[ 📍 Center Pins to Screen ]", "KEY"),
+            (" to reset targeting pins to default game proportions.\n\n", "BODY"),
+
+            ("STEP 3: PLACE TARGET PINS", "HEADER"),
+            ("\n• Click ", "BODY"),
+            ("[ 📍 Show Target Pins ]", "KEY"),
+            (" to display the two floating pins:\n", "BODY"),
+            ("   1. 🎣 WATER AIM (Cyan):", "STEP"),
+            (" Drag onto the purple pond where your rod should cast.\n", "BODY"),
+            ("   2. 🎯 GREEN BAR (Green):", "STEP"),
+            (" Drag over where the minigame green bar appears.\n", "BODY"),
+            ("• Tip: Click ", "BODY"),
+            ("[ 📐 Auto-Align Bar ]", "KEY"),
+            (" to place the bar pin right below the water aim.\n\n", "BODY"),
+
+            ("STEP 4: TEST 1 CYCLE", "HEADER"),
+            ("\n• Click ", "BODY"),
+            ("[ 🎯 TEST 1 CYCLE (F7) ]", "KEY"),
+            (" to verify your setup.\n  Target pins automatically hide so clicks and color sampling reach Roblox directly.\n\n", "BODY"),
+
+            ("STEP 5: START AUTO-FISHING", "HEADER"),
+            ("\n• Press ", "BODY"),
+            ("F6", "KEY"),
+            (" or click ", "BODY"),
+            ("[ ▶ START (F6) ]", "STEP"),
+            (" to start auto-fishing.\n• Press ", "BODY"),
+            ("F6", "KEY"),
+            (" again anytime to pause.\n\n", "BODY"),
+
+            ("SHORTCUT HOTKEYS", "HEADER"),
+            ("\n• ", "BODY"),
+            ("F6:", "KEY"),
+            (" Start / Pause Auto-Fisher\n• ", "BODY"),
+            ("F7:", "KEY"),
+            (" Test 1 Fishing Cycle\n• ", "BODY"),
+            ("F1 / F2:", "KEY"),
+            (" Decrease / Increase Cast Hold (±0.05s)\n• ", "BODY"),
+            ("F9 / F10:", "KEY"),
+            (" Decrease / Increase Popup Wait (±0.5s)\n• ", "BODY"),
+            ("F8:", "KEY"),
+            (" Exit Application\n", "BODY")
+        ]
+
+        for text, tag in instructions:
+            txt.insert("end", text, tag)
+        txt.config(state="disabled")
+
+        btn_box = tk.Frame(win, bg="#0c0d10")
+        btn_box.pack(fill="x", padx=12, pady=(4, 10))
+        tk.Button(
+            btn_box, text="✔ Got It / Close", bg="#21262d", fg="#58a6ff",
+            activebackground="#30363d", activeforeground="#ffffff",
+            font=("Consolas", 9, "bold"), bd=1, relief="solid", padx=16, pady=4,
+            command=win.destroy
+        ).pack(side="right")
 
     # =========================================================================
     # Fishing Loop Engine
@@ -1075,42 +1578,77 @@ class AutoFishGUI:
         if self.roblox_hwnd and ctypes.windll.user32.IsWindow(self.roblox_hwnd):
             return self.roblox_hwnd
 
-        calib_x = self.config.get("calibrated_bar_x")
-        calib_y = self.config.get("calibrated_bar_y")
-        if calib_x is not None and calib_y is not None:
-            pt = POINT(int(calib_x), int(calib_y))
-            h = ctypes.windll.user32.WindowFromPoint(pt)
-            if h:
-                root = ctypes.windll.user32.GetAncestor(h, GA_ROOT)
-                if root and ctypes.windll.user32.IsWindow(root):
-                    self.roblox_hwnd = root
-                    return root
-                self.roblox_hwnd = h
-                return h
-
-        h = ctypes.windll.user32.FindWindowW(None, "Roblox")
-        if h:
+        # 1. Try class name WINDOWSCLIENT (Standard Roblox desktop client)
+        h = ctypes.windll.user32.FindWindowW("WINDOWSCLIENT", None)
+        if h and ctypes.windll.user32.IsWindow(h):
             self.roblox_hwnd = h
             return h
 
+        # 2. Try window title "Roblox"
+        h = ctypes.windll.user32.FindWindowW(None, "Roblox")
+        if h and ctypes.windll.user32.IsWindow(h):
+            self.roblox_hwnd = h
+            return h
+
+        # 3. EnumWindows checking class name, window title, or player name
         found_h = None
         def enum_cb(hwnd, _):
             nonlocal found_h
             if ctypes.windll.user32.IsWindowVisible(hwnd):
-                length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
-                if length > 0:
-                    buf = ctypes.create_unicode_buffer(length + 1)
-                    ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
-                    if "roblox" in buf.value.lower():
-                        found_h = hwnd
-                        return False
+                cbuf = ctypes.create_unicode_buffer(256)
+                ctypes.windll.user32.GetClassNameW(hwnd, cbuf, 256)
+                if cbuf.value == "WINDOWSCLIENT":
+                    found_h = hwnd
+                    return False
+                buf = ctypes.create_unicode_buffer(256)
+                ctypes.windll.user32.GetWindowTextW(hwnd, buf, 256)
+                title = buf.value.lower()
+                if "roblox" in title:
+                    found_h = hwnd
+                    return False
             return True
 
         WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
         ctypes.windll.user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+        if not found_h:
+            try:
+                hdesk = ctypes.windll.user32.OpenDesktopW("default", 0, False, 0x01FF)
+                if hdesk:
+                    def enum_desk_cb(hwnd, _):
+                        nonlocal found_h
+                        if ctypes.windll.user32.IsWindowVisible(hwnd):
+                            cbuf = ctypes.create_unicode_buffer(256)
+                            ctypes.windll.user32.GetClassNameW(hwnd, cbuf, 256)
+                            if cbuf.value == "WINDOWSCLIENT":
+                                found_h = hwnd
+                                return False
+                            buf = ctypes.create_unicode_buffer(256)
+                            ctypes.windll.user32.GetWindowTextW(hwnd, buf, 256)
+                            title = buf.value.lower()
+                            if "roblox" in title:
+                                found_h = hwnd
+                                return False
+                        return True
+                    ctypes.windll.user32.EnumDesktopWindows(hdesk, WNDENUMPROC(enum_desk_cb), 0)
+                    ctypes.windll.user32.CloseDesktop(hdesk)
+            except Exception:
+                pass
         if found_h:
             self.roblox_hwnd = found_h
             return found_h
+
+        # 4. Check window directly under the calibrated bar or water aim point
+        for pt_key in [("calibrated_bar_x", "calibrated_bar_y"), ("cast_aim_x", "cast_aim_y")]:
+            cx = self.config.get(pt_key[0])
+            cy = self.config.get(pt_key[1])
+            if cx is not None and cy is not None:
+                pt = POINT(int(cx), int(cy))
+                h = ctypes.windll.user32.WindowFromPoint(pt)
+                if h:
+                    root = ctypes.windll.user32.GetAncestor(h, GA_ROOT)
+                    target = root if (root and ctypes.windll.user32.IsWindow(root)) else h
+                    self.roblox_hwnd = target
+                    return target
 
         return None
 
@@ -1118,6 +1656,7 @@ class AutoFishGUI:
         hwnd = self.get_roblox_hwnd()
         if hwnd:
             focus_window(hwnd)
+            time.sleep(0.06)
             return True
         return False
 
@@ -1158,7 +1697,7 @@ class AutoFishGUI:
         if now - self.last_anti_afk >= interval:
             self.last_anti_afk = now
             self.log("[ANTI-AFK] Resetting Roblox 20-min idle timer...", "MAGENTA")
-            if self.config.get("use_adb", True):
+            if self.config.get("use_adb", False):
                 self.adb.anti_afk_jump()
             else:
                 key_tap(VK_SPACE)
@@ -1167,8 +1706,7 @@ class AutoFishGUI:
         jitter = self.config.get("jitter_amount", 0.015)
         max_wait = self.config.get("max_bite_wait_seconds", 24.0)
         min_buffer = self.config.get("min_wait_before_bite", 1.8)
-        use_adb = self.config.get("use_adb", True)
-        bg_mode = self.config.get("background_focus_swap", True)
+        use_adb = self.config.get("use_adb", False)
 
         cast_time = self.config.get("cast_hold_duration", 1.05)
         self.total_casts += 1
@@ -1185,30 +1723,26 @@ class AutoFishGUI:
             self.adb.cast_hold(adb_x, adb_y, duration=cast_time)
             self.log(f"  └─ [⚡ Monkey Hold] Released after exact {cast_time:.2f}s! (Perfect cast)", "SUCCESS")
         else:
-            aim_x = self.config.get("cast_aim_x", -495)
-            aim_y = self.config.get("cast_aim_y", 1003)
+            aim_x = self.config.get("cast_aim_x", 960)
+            aim_y = self.config.get("cast_aim_y", 540)
             self.action_card.val_lbl.config(text=f"Casting ({cast_time:.2f}s hold)...", fg="#e3b341")
-            self.log(f"▶ Cast #{self.total_casts}: Holding rod for {cast_time:.2f}s...", "INFO")
+            self.log(f"▶ Cast #{self.total_casts}: Holding rod for {cast_time:.2f}s at ({aim_x}, {aim_y})...", "INFO")
 
-            saved_x, saved_y = get_cursor_pos()
-            saved_hwnd = ctypes.windll.user32.GetForegroundWindow()
+            r_hwnd = self.get_roblox_hwnd()
+            if r_hwnd:
+                focus_window(r_hwnd)
+                time.sleep(0.08)
 
             try:
-                if bg_mode:
-                    self.ensure_roblox_focused()
-                    set_cursor_pos(aim_x, aim_y)
-                    time.sleep(0.04)
-
-                mouse_down()
+                # Single continuous long-press hold for exact cast_time (1.05s) - NO premature taps!
+                send_mouse_down_at(aim_x, aim_y)
                 start_hold = time.perf_counter()
                 while (time.perf_counter() - start_hold) < cast_time:
                     time.sleep(0.005)
             finally:
-                mouse_up()
-                if bg_mode:
-                    restore_user_state(saved_hwnd, saved_x, saved_y)
+                send_mouse_up_at(aim_x, aim_y)
 
-            self.log("  └─ Rod thrown! Focus restored to you.", "SUCCESS")
+            self.log(f"  └─ Rod thrown! Released after exact {cast_time:.2f}s! (Perfect cast)", "SUCCESS")
 
         if not self.is_running and not self.test_mode:
             return
@@ -1222,8 +1756,8 @@ class AutoFishGUI:
         # ---------------------------------------------------------------------
         # 3. BACKGROUND BITE WATCH (Checks dynamically until green bar appears)
         # ---------------------------------------------------------------------
-        calib_x = self.config.get("calibrated_bar_x")
-        calib_y = self.config.get("calibrated_bar_y")
+        calib_x = self.config.get("calibrated_bar_x", 960)
+        calib_y = self.config.get("calibrated_bar_y", 720)
         self.action_card.val_lbl.config(text="Waiting for fish bite (Green Bar)...", fg="#39d353")
         self.log(f"  └─ Line in water! Waiting for green bar to appear (random 3-12s)...", "INFO")
 
@@ -1274,28 +1808,23 @@ class AutoFishGUI:
             self.adb.rapid_tap(adb_reel_x, adb_reel_y, count=click_count, interval=0.020)
             self.log("  └─ [⚡ Monkey Turbo] Reeling complete!", "SUCCESS")
         else:
-            aim_x = self.config.get("cast_aim_x", -502)
-            aim_y = self.config.get("cast_aim_y", 1000)
+            aim_x = self.config.get("cast_aim_x", 960)
+            aim_y = self.config.get("cast_aim_y", 540)
             self.action_card.val_lbl.config(text=f"Reeling ({click_count} clicks)...", fg="#e3b341")
-            self.log(f"  └─ Reeling in with {click_count} rapid clicks...", "INFO")
+            self.log(f"  └─ Reeling in with {click_count} rapid clicks at ({aim_x}, {aim_y})...", "INFO")
 
-            saved_x, saved_y = get_cursor_pos()
-            saved_hwnd = ctypes.windll.user32.GetForegroundWindow()
+            r_hwnd = self.get_roblox_hwnd()
+            if r_hwnd:
+                focus_window(r_hwnd)
+                time.sleep(0.06)
 
-            try:
-                if bg_mode:
-                    self.ensure_roblox_focused()
-                    set_cursor_pos(aim_x, aim_y)
-                    time.sleep(0.04)
+            for i in range(click_count):
+                if not self.is_running and not self.test_mode:
+                    break
+                mouse_click_at(aim_x, aim_y, hold_time=0.015)
+                human_sleep(click_interval, jitter=jitter)
 
-                for i in range(click_count):
-                    if not self.is_running and not self.test_mode:
-                        break
-                    mouse_click(hold_time=0.015)
-                    human_sleep(click_interval, jitter=jitter)
-            finally:
-                if bg_mode:
-                    restore_user_state(saved_hwnd, saved_x, saved_y)
+            self.log(f"  └─ Reeling complete ({click_count} clicks executed)!", "SUCCESS")
 
         self.total_catches += 1
         self.catches_card.val_lbl.config(text=str(self.total_catches))
@@ -1338,11 +1867,9 @@ class AutoFishGUI:
         hotkeys = self.config.get("hotkeys", {})
         vk_keys = {
             "toggle": VK_MAP.get(hotkeys.get("toggle", "F6").upper(), 0x75),
-            "water": VK_MAP.get(hotkeys.get("set_water_aim", "F5").upper(), 0x74),
             "dec_cast": VK_MAP.get(hotkeys.get("decrease_cast", "F1").upper(), 0x70),
             "inc_cast": VK_MAP.get(hotkeys.get("increase_cast", "F2").upper(), 0x71),
             "calib": VK_MAP.get(hotkeys.get("calibrate_bar", "F3").upper(), 0x72),
-            "inspect": VK_MAP.get(hotkeys.get("inspect_pixel", "F4").upper(), 0x73),
             "test": VK_MAP.get(hotkeys.get("test_single", "F7").upper(), 0x76),
             "dec_cd": VK_MAP.get(hotkeys.get("decrease_cooldown", "F9").upper(), 0x78),
             "inc_cd": VK_MAP.get(hotkeys.get("increase_cooldown", "F10").upper(), 0x79),
@@ -1360,16 +1887,12 @@ class AutoFishGUI:
     def _on_hotkey(self, action):
         if action == "toggle":
             self.root.after(0, self.toggle_running)
-        elif action == "water":
-            self.root.after(0, self.set_aim_spot)
         elif action == "dec_cast":
             self.root.after(0, lambda: self.adjust_cast_time(-0.05))
         elif action == "inc_cast":
             self.root.after(0, lambda: self.adjust_cast_time(+0.05))
         elif action == "calib":
             self.root.after(0, self._calibrate_bar_hotkey)
-        elif action == "inspect":
-            self.root.after(0, self.toggle_inspector)
         elif action == "test":
             self.root.after(0, self.run_test)
         elif action == "dec_cd":
@@ -1388,11 +1911,15 @@ class AutoFishGUI:
     def on_close(self):
         self.should_exit = True
         self.is_running = False
-        self.inspector_active = False
         if self.aim_pin:
             self.aim_pin.destroy()
         if self.bar_pin:
             self.bar_pin.destroy()
+        if hasattr(self, "instructions_win") and self.instructions_win:
+            try:
+                self.instructions_win.destroy()
+            except Exception:
+                pass
         self.adb.close()
         self.display.close()
         self.root.destroy()
