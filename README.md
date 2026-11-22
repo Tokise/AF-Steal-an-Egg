@@ -1,7 +1,6 @@
 # 🎣 Roblox: Steal an Egg — Auto-Fishing Automation Suite
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-blue?style=flat-square&logo=windows)](https://github.com)
-[![Direct Download](https://img.shields.io/badge/Download-StealAnEgg__AutoFish.exe-success?style=for-the-badge&logo=windows)](#-github-release--download-guide)
 [![Roblox](https://img.shields.io/badge/Game-Roblox%3A%20Steal%20an%20Egg-red?style=flat-square&logo=roblox)](https://www.roblox.com)
 [![Engine](https://img.shields.io/badge/Android%20Engine-LDPlayer%209%20%2B%20Monkey-orange?style=flat-square&logo=android)](https://www.ldplayer.net)
 
@@ -16,7 +15,6 @@ An advanced, ban-safe auto-fishing automation suite for **Roblox: Steal an Egg**
 - [🎨 Version 2: Multi-Monitor Dark GUI Dashboard with Draggable Pins](#-version-2-multi-monitor-dark-gui-dashboard-with-draggable-pins)
 - [🛡️ Version 3: Windows Sandbox Virtual Environment (`.wsb`)](#️-version-3-windows-sandbox-virtual-environment-wsb)
 - [⚡ Version 4: LDPlayer 9 + ADB Monkey Engine (Recommended)](#-version-4-ldplayer-9--adb-monkey-engine-recommended)
-- [🌐 GitHub Release & Download Guide](#-github-release--download-guide)
 - [📁 Project File Structure](#-project-file-structure)
 
 ---
@@ -230,56 +228,6 @@ The ultimate, production-grade automation setup. Runs Roblox inside **LDPlayer 9
    - Target pins auto-hide.
    - The bot casts with exact 1.05s hold timing, waits for the bobber to settle (1.8s), and dynamically waits through the variable bite delay (3–10s+).
    - The instant the green minigame bar appears, 16 turbo taps fire in <0.45s, securing the catch!
-
----
-
-## 🌐 GitHub Release & Download Guide
-
-To publish this project on GitHub and provide users with a **direct 1-click executable download** (no Python, no Git, and no compilation required):
-
-### 1. Create a GitHub Release
-1. Push your repository to GitHub:
-   ```bash
-   git init
-   git add .
-   git commit -m "Release v1.0.0 - Production Auto-Fishing Suite"
-   git branch -M main
-   git remote add origin https://github.com/<your-username>/<your-repo-name>.git
-   git push -u origin main
-   ```
-2. Navigate to your repository page on GitHub.
-3. In the right sidebar, click **Releases** ➔ **Draft a new release**.
-4. Set **Tag version** to `v1.0.0` (create tag on publish).
-5. Set **Release title** to `Steal an Egg Auto-Fisher v1.0.0 (Standalone Executable)`.
-6. Under **Attach binaries by dropping them here**, drag and drop:
-   - **`StealAnEgg_AutoFish.exe`** (from this folder).
-7. Click **Publish release**.
-
-### 2. Direct Download Link for README
-Users can download the latest binary directly via:
-```markdown
-[Download StealAnEgg_AutoFish.exe](https://github.com/<your-username>/<your-repo-name>/releases/latest/download/StealAnEgg_AutoFish.exe)
-```
-
-### 3. Binary Integrity Verification (SHA-256)
-Users can verify that the downloaded executable is untampered and authentic:
-
-| File | SHA-256 Checksum |
-|---|---|
-| `StealAnEgg_AutoFish.exe` | `D56D917A6DFC6BB08C887D2645B825E84F3D77C6D03F8337D03B016B25CE8277` |
-
-To verify on Windows via PowerShell:
-```powershell
-Get-FileHash -Path .\StealAnEgg_AutoFish.exe -Algorithm SHA256
-```
-
-### 4. Windows SmartScreen Notice
-Because the standalone `.exe` is built with PyInstaller and not signed with an expensive enterprise certificate, Windows SmartScreen may show:
-> *"Windows protected your PC — Microsoft Defender SmartScreen prevented an unrecognized app from starting."*
-
-- Click **More info**.
-- Click **Run anyway**.
-- The binary is 100% open-source and free of malware (full source code in `gui_autofish.py`).
 
 ---
 
