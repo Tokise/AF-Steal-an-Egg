@@ -1,0 +1,40 @@
+{
+  "use_adb": true,
+  "adb_path": "E:\\LDPlayer\\LDPlayer9\\adb.exe",
+  "adb_cast_x": 640,
+  "adb_cast_y": 420,
+  "adb_reel_x": 640,
+  "adb_reel_y": 420,
+  "background_focus_swap": true,
+  "cast_aim_x": -495,
+  "cast_aim_y": 1003,
+  "calibrated_bar_x": -495,
+  "calibrated_bar_y": 1150,
+  "calibrated_color": [
+    159,
+    204,
+    116
+  ],
+  "cast_hold_duration": 1.05,
+  "min_wait_before_bite": 1.8,
+  "reeling_clicks": 16,
+  "click_interval": 0.02,
+  "post_catch_cooldown": 4.0,
+  "max_bite_wait_seconds": 24.0,
+  "color_tolerance": 55,
+  "jitter_amount": 0.015,
+  "anti_afk_enabled": true,
+  "anti_afk_interval_seconds": 120,
+  "hotkeys": {
+    "toggle": "F6",
+    "set_water_aim": "F5",
+    "decrease_cast": "F1",
+    "increase_cast": "F2",
+    "calibrate_bar": "F3",
+    "inspect_pixel": "F4",
+    "test_single": "F7",
+    "decrease_cooldown": "F9",
+    "increase_cooldown": "F10",
+    "exit": "F8"
+  }
+}

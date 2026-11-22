@@ -1,0 +1,14 @@
+<Configuration>
+  <VGpu>Enable</VGpu>
+  <Networking>Default</Networking>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>F:\Documents\Coding\Scipts</HostFolder>
+      <SandboxFolder>C:\Users\WDAGUtilityAccount\Desktop\Scripts</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>explorer.exe C:\Users\WDAGUtilityAccount\Desktop\Scripts</Command>
+  </LogonCommand>
+</Configuration>
