@@ -1644,107 +1644,117 @@ class AutoFishGUI:
 
     def check_rod_equipped(self) -> bool:
         """
-        Verifies the rod is in Slot N by comparing the saved baseline color.
-        Only triggers a re-equip when the color difference is drastic (rod icon → egg icon swap).
-        Does NOT press any keys - purely a pixel inspection.
-        Returns True (rod OK / skip) or False (rod missing, re-equip needed).
+        Verifies the rod is in Slot N by comparing a saved baseline color.
+        On the FIRST call (baseline = white/unset), auto-captures the current pixel
+        as the rod baseline — assumes the rod IS equipped when fishing starts.
+        Returns True (rod OK) or False (rod missing, re-equip needed).
+        Does NOT press any keys — purely pixel inspection.
         """
         if not self.config.get("auto_reequip_enabled", True):
             return True
 
         slot_x = self.config.get("rod_slot_x")
         slot_y = self.config.get("rod_slot_y")
-        # Skip if pins have never been calibrated (coordinates are still at hardcoded defaults)
         if slot_x is None or slot_y is None:
             return True
 
-        active_col = self.config.get("rod_slot_active_color")
-        # Skip check if baseline color was never recorded (default white or missing)
-        if not active_col or active_col == [255, 255, 255]:
-            return True
-
-        # Sample pixel at rod slot location
+        # Sample the current pixel at rod slot
         cur_col = self.display.get_pixel(slot_x, slot_y)
         if not cur_col:
             return True  # Can't read pixel, assume ok
 
+        active_col = self.config.get("rod_slot_active_color")
+
+        # ── Auto-capture baseline on first use ──────────────────────────────
+        # If baseline is still the factory default (white), capture it NOW.
+        # This moment is BEFORE the first cast, so the rod must be in hand.
+        if not active_col or active_col == [255, 255, 255]:
+            self.config["rod_slot_active_color"] = list(cur_col)
+            save_config(self.config)
+            self.log(
+                f"[RE-EQUIP] 📸 Auto-captured rod baseline: Slot ({slot_x},{slot_y}) = RGB{tuple(cur_col)}",
+                "SUCCESS"
+            )
+            return True  # We just set the baseline — rod is definitely there right now
+
         diff = color_diff(cur_col, active_col)
-        # Use a generous threshold: egg icons are very different colors from rod icons
-        # (rod ≈ dark blue-grey, egg ≈ pink/yellow/pastel)
-        if diff > 120:
-            self.log(f"[RE-EQUIP] Slot pixel changed drastically (diff={diff}). "
-                     f"Expected RGB{tuple(active_col)}, got RGB{tuple(cur_col)}. Rod may be displaced!", "WARN")
+        # Threshold 100: rod icon vs egg icon color difference is typically 150–250 in RGB sum
+        if diff > 100:
+            self.log(
+                f"[RE-EQUIP] ⚠ Slot color changed! diff={diff} "
+                f"(baseline RGB{tuple(active_col)} → current RGB{tuple(cur_col)}). Rod displaced!",
+                "WARN"
+            )
             return False
 
         return True
 
     def _send_tilde_to_roblox(self):
         """
-        Reliably sends the ~ / backtick key to Roblox.
-        Clicks the game viewport first to ensure keyboard focus is on the game,
-        not the chat box or any overlay, before sending VK_OEM_3 (0xC0, scan 0x29).
+        Reliably sends the ~ key to open/close the bag in Roblox.
+        Brings Roblox to the foreground and uses PostMessage so the key
+        reaches the game even if another window steals focus mid-sequence.
+        VK_OEM_3 = 0xC0, scan code = 0x29.
         """
         r_hwnd = self.get_roblox_hwnd()
         if r_hwnd:
             focus_window(r_hwnd)
-            time.sleep(0.08)
-            # Click center of game to dismiss any popups / chat focus
-            rect = wintypes.RECT()
-            ctypes.windll.user32.GetClientRect(r_hwnd, ctypes.byref(rect))
-            # Map client center to screen coords
-            pt = POINT(
-                rect.left + (rect.right - rect.left) // 2,
-                rect.top + (rect.bottom - rect.top) // 2
-            )
-            ctypes.windll.user32.ClientToScreen(r_hwnd, ctypes.byref(pt))
-            # Right-click to dismiss chat without side effects on game state
-            ctypes.windll.user32.SetCursorPos(pt.x, pt.y)
-            time.sleep(0.04)
-            # Use Escape first to close any open UI / chat bar
-            key_tap(0x1B)  # VK_ESCAPE
-            time.sleep(0.12)
-        key_tap(0xC0)  # VK_OEM_3  (~)
+            time.sleep(0.10)
+        scan = ctypes.windll.user32.MapVirtualKeyW(0xC0, 0)  # → 0x29
+        # Use both keybd_event AND PostMessage for maximum reliability
+        ctypes.windll.user32.keybd_event(0xC0, scan, 0, 0)
+        time.sleep(0.05)
+        ctypes.windll.user32.keybd_event(0xC0, scan, KEYEVENTF_KEYUP, 0)
 
     def execute_reequip(self) -> bool:
-        """Executes the full 6-step bag opening, gear selection, search, drag & equip sequence."""
+        """Executes the full bag-open → gear tab → search → drag → close → equip sequence."""
         use_adb = self.config.get("use_adb", False)
-        gear_x = self.config.get("gear_tab_x")
-        gear_y = self.config.get("gear_tab_y")
+        gear_x  = self.config.get("gear_tab_x")
+        gear_y  = self.config.get("gear_tab_y")
         search_x = self.config.get("bag_search_x")
         search_y = self.config.get("bag_search_y")
-        rod_x = self.config.get("bag_rod_x")
-        rod_y = self.config.get("bag_rod_y")
-        slot_x = self.config.get("rod_slot_x")
-        slot_y = self.config.get("rod_slot_y")
+        rod_x   = self.config.get("bag_rod_x")
+        rod_y   = self.config.get("bag_rod_y")
+        slot_x  = self.config.get("rod_slot_x")
+        slot_y  = self.config.get("rod_slot_y")
         search_term = self.config.get("rod_search_term", "rod")
-        slot_num = self.config.get("rod_slot_number", 3)
+        slot_num    = self.config.get("rod_slot_number", 3)
 
         if any(v is None for v in [gear_x, gear_y, search_x, search_y, rod_x, rod_y, slot_x, slot_y]):
-            self.log("[RE-EQUIP] Cannot re-equip: Coordinates not configured. Click [🎒 Re-Equip Pins] to calibrate.", "ERROR")
+            self.log("[RE-EQUIP] ✗ Coordinates not set — click [🎒 Re-Equip Pins] to calibrate.", "ERROR")
             return False
 
-        self.log(">>> [RE-EQUIP] Initiating automatic rod re-equipment sequence...", "WARN")
-        self.action_card.val_lbl.config(text="Re-Equipping Rod (Slot 3)...", fg="#bc8cff")
+        self.log(">>> [RE-EQUIP] Starting rod re-equip sequence...", "WARN")
+        self.action_card.val_lbl.config(text="Re-Equipping Rod...", fg="#bc8cff")
 
-        # 1. Open Bag using ~ (Escape first to clear chat/popups, then tilde)
-        self.log("  └─ 1. Opening Bag with [~]...", "INFO")
+        r_hwnd = self.get_roblox_hwnd()
+
+        # ── Helper: focus Roblox before every step ───────────────────────────
+        def focus_game():
+            if r_hwnd:
+                focus_window(r_hwnd)
+                time.sleep(0.12)
+
+        # ── 1. Open Bag ───────────────────────────────────────────────────────
+        self.log("  └─ 1. Opening bag [~]...", "INFO")
         if use_adb:
-            self.adb.press_key(68)  # KEYCODE_GRAVE
-            time.sleep(0.60)
+            self.adb.press_key(68)   # KEYCODE_GRAVE
+            time.sleep(0.80)
         else:
             self._send_tilde_to_roblox()
-            time.sleep(0.70)  # Give bag animation time to fully open
+            time.sleep(0.90)         # Wait for bag open animation
 
-        # 2. Click Gear Category tab
-        self.log(f"  └─ 2. Selecting 'Gear' tab at ({gear_x}, {gear_y})...", "INFO")
+        # ── 2. Click Gear tab ─────────────────────────────────────────────────
+        self.log(f"  └─ 2. Gear tab → ({gear_x}, {gear_y})...", "INFO")
         if use_adb:
             self.adb.tap(gear_x, gear_y)
         else:
-            mouse_click_at(gear_x, gear_y, hold_time=0.05)
-        time.sleep(0.45)
+            focus_game()
+            mouse_click_at(gear_x, gear_y, hold_time=0.08)
+        time.sleep(0.50)
 
-        # 3. Click Search Box & clear & type search term
-        self.log(f"  └─ 3. Filtering by '{search_term}' at ({search_x}, {search_y})...", "INFO")
+        # ── 3. Search for rod ─────────────────────────────────────────────────
+        self.log(f"  └─ 3. Search '{search_term}' at ({search_x}, {search_y})...", "INFO")
         if use_adb:
             self.adb.tap(search_x, search_y)
             time.sleep(0.20)
@@ -1752,49 +1762,57 @@ class AutoFishGUI:
             time.sleep(0.10)
             self.adb.send_text(search_term)
         else:
-            mouse_click_at(search_x, search_y, hold_time=0.05)
-            time.sleep(0.20)
-            clear_text_box()
+            focus_game()
+            mouse_click_at(search_x, search_y, hold_time=0.08)
+            time.sleep(0.25)
+            # Select all and delete existing text, then type
+            ctypes.windll.user32.keybd_event(0x11, 0, 0, 0)   # Ctrl down
+            ctypes.windll.user32.keybd_event(0x41, 0, 0, 0)   # A
+            time.sleep(0.03)
+            ctypes.windll.user32.keybd_event(0x41, 0, KEYEVENTF_KEYUP, 0)
+            ctypes.windll.user32.keybd_event(0x11, 0, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.03)
+            key_tap(0x2E)  # Delete
             time.sleep(0.05)
             send_text(search_term)
-        time.sleep(0.50)  # Wait for results to load
+        time.sleep(0.60)  # Wait for results
 
-        # 4. Drag Rod from Bag to Hotbar Slot
-        self.log(f"  └─ 4. Dragging Rod ({rod_x},{rod_y}) → Slot {slot_num} ({slot_x},{slot_y})...", "INFO")
+        # ── 4. Drag Rod → Slot ────────────────────────────────────────────────
+        self.log(f"  └─ 4. Drag rod ({rod_x},{rod_y}) → slot {slot_num} ({slot_x},{slot_y})...", "INFO")
         if use_adb:
-            self.adb.drag(rod_x, rod_y, slot_x, slot_y, duration_ms=500)
+            self.adb.drag(rod_x, rod_y, slot_x, slot_y, duration_ms=600)
         else:
-            mouse_drag_at(rod_x, rod_y, slot_x, slot_y, duration=0.50, steps=25)
+            focus_game()
+            mouse_drag_at(rod_x, rod_y, slot_x, slot_y, duration=0.60, steps=30)
         time.sleep(0.50)
 
-        # 5. Close Bag with ~
-        self.log("  └─ 5. Closing Bag with [~]...", "INFO")
+        # ── 5. Close Bag ──────────────────────────────────────────────────────
+        self.log("  └─ 5. Closing bag [~]...", "INFO")
         if use_adb:
             self.adb.press_key(68)
-            time.sleep(0.40)
+            time.sleep(0.50)
         else:
             self._send_tilde_to_roblox()
-            time.sleep(0.50)
+            time.sleep(0.60)
 
-        # 6. Press slot number key to equip in hand
-        self.log(f"  └─ 6. Equipping Rod (pressing '{slot_num}')...", "INFO")
+        # ── 6. Press slot key to equip ────────────────────────────────────────
+        self.log(f"  └─ 6. Pressing '{slot_num}' to equip rod...", "INFO")
         if use_adb:
             self.adb.press_key(7 + slot_num)
         else:
-            self.ensure_roblox_focused()
-            time.sleep(0.05)
-            key_tap(0x30 + slot_num)  # 0x33 = '3'
-        time.sleep(0.30)
+            focus_game()
+            key_tap(0x30 + slot_num)   # 0x31='1' … 0x33='3'
+        time.sleep(0.35)
 
-        # Capture new baseline color for Slot N after rod is equipped
-        time.sleep(0.15)
+        # ── 7. Update baseline color ──────────────────────────────────────────
+        time.sleep(0.20)
         new_col = self.display.get_pixel(slot_x, slot_y)
         if new_col:
             self.config["rod_slot_active_color"] = list(new_col)
             save_config(self.config)
-            self.log(f"  └─ Baseline updated: Slot {slot_num} color = RGB{tuple(new_col)}", "INFO")
+            self.log(f"  └─ Baseline updated: Slot {slot_num} = RGB{tuple(new_col)}", "INFO")
 
-        self.log(f">>> [RE-EQUIP] ✔ Re-equip complete! Rod back in Slot {slot_num}.", "SUCCESS")
+        self.log(f">>> [RE-EQUIP] ✔ Rod back in Slot {slot_num}!", "SUCCESS")
         try:
             winsound.Beep(1800, 150)
         except Exception:
