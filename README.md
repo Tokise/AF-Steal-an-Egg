@@ -219,20 +219,30 @@ The ultimate, production-grade automation setup. Runs Roblox inside **LDPlayer 9
 
 ### Step-by-Step Setup
 1. **Launch LDPlayer 9 & Roblox:**
-   - Open LDPlayer 9.
+   - Open LDPlayer 9 (or Roblox Windows client).
    - Launch Roblox and enter **Steal an Egg**.
    - Walk your character to the wooden bridge at the purple pond and hold your fishing rod.
 2. **Launch the Macro:**
    - Double-click **[StealAnEgg_AutoFish.exe](file:///f:/Documents/Coding/Scipts/StealAnEgg_AutoFish.exe)** (or run `start.bat`).
-   - The top badge will show `[ ⚡ ADB: emulator-5554 ]` in green once connected.
+   - The top badge will show your active mode (`[ ⚡ ADB: emulator-5554 ]` or `[ 🖥️ MODE: DIRECT WINDOWS ]`).
 3. **Place Pins & Test 1 Cycle:**
    - Click **`[ 📍 Show Target Pins ]`** (or **`[ 📍 Center Pins to Screen ]`**) to position your targets.
    - Click **`[ 🎯 TEST 1 CYCLE (F7) ]`**: Automatically hides pins and executes a single full cycle (cast hold -> bite watch -> rapid reeling) to verify your setup before starting continuous fishing.
-4. **Start Auto-Fishing:**
+4. **Auto Re-Equip Rod Setup (Optional but Recommended):**
+   - Caught eggs fill your hotbar and eventually push your fishing rod into your backpack.
+   - Check **`[✔] Auto Re-Equip Rod (Slot 3)`**.
+   - Click **`[ 🎒 Re-Equip Pins ]`**: Opens your bag automatically and displays 4 draggable pins:
+     1. **`⚙️ GEAR TAB` (Blue)**: Place over the Gear/Bat icon on the bag's left sidebar.
+     2. **`🔍 BAG SEARCH` (Yellow)**: Place over the bag's `search` text box.
+     3. **`🎣 ROD IN BAG` (Orange)**: Place over the first rod in the bag search results.
+     4. **`🔢 ROD SLOT 3` (Purple)**: Place over Hotbar Slot 3 (automatically saves baseline slot color).
+   - Click **`[ 🧪 Test Re-Equip ]`** to watch the bot execute the bag opening, category switch, search, drag-and-drop, and re-equip sequence.
+5. **Start Auto-Fishing:**
    - Press **`F6`** (or click **`▶ START`**).
    - Target pins auto-hide.
    - The bot casts with exact 1.05s hold timing, waits for the bobber to settle (1.8s), and dynamically waits through the variable bite delay (3–10s+).
    - The instant the green minigame bar appears, 16 turbo taps fire in <0.45s, securing the catch!
+   - If caught eggs push the rod out of Slot 3, the bot automatically re-equips it and continues fishing indefinitely!
 
 ---
 

@@ -154,6 +154,18 @@ DEFAULT_CONFIG = {
     "jitter_amount": 0.015,
     "anti_afk_enabled": True,
     "anti_afk_interval_seconds": 120,
+    "auto_reequip_enabled": True,
+    "rod_slot_number": 3,
+    "rod_search_term": "rod",
+    "gear_tab_x": -760,
+    "gear_tab_y": 480,
+    "bag_search_x": -360,
+    "bag_search_y": 280,
+    "bag_rod_x": -570,
+    "bag_rod_y": 380,
+    "rod_slot_x": -588,
+    "rod_slot_y": 1215,
+    "rod_slot_active_color": [255, 255, 255],
     "hotkeys": {
         "toggle": "F6",
         "decrease_cast": "F1",
@@ -384,6 +396,22 @@ DispatchPointer(1000, {1000 + hold_ms}, 1, {float(x)}, {float(y)}, 1.0, 1.0, 0, 
 
     def anti_afk_jump(self):
         self.send_cmd("input keyevent 62")
+
+    def drag(self, x1, y1, x2, y2, duration_ms=250):
+        self.send_cmd(f"input swipe {int(x1)} {int(y1)} {int(x2)} {int(y2)} {duration_ms}")
+
+    def tap(self, x, y):
+        self.send_cmd(f"input tap {int(x)} {int(y)}")
+
+    def send_text(self, text):
+        self.send_cmd(f"input text {text}")
+
+    def clear_text(self, count=10):
+        keys = " ".join(["67"] * count)
+        self.send_cmd(f"input keyevent {keys}")
+
+    def press_key(self, keycode):
+        self.send_cmd(f"input keyevent {keycode}")
 
     def close(self):
         if self.process:
@@ -666,9 +694,60 @@ def mouse_click(hold_time=0.02):
 
 
 def key_tap(vk_code):
-    ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
+    scan = ctypes.windll.user32.MapVirtualKeyW(vk_code, 0)
+    ctypes.windll.user32.keybd_event(vk_code, scan, 0, 0)
+    time.sleep(0.06)
+    ctypes.windll.user32.keybd_event(vk_code, scan, KEYEVENTF_KEYUP, 0)
+
+
+def mouse_drag_at(x1, y1, x2, y2, duration=0.25, steps=15):
+    vx = ctypes.windll.user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+    vy = ctypes.windll.user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+    vw = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CXVIRTUALSCREEN))
+    vh = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
+
+    send_mouse_down_at(x1, y1)
     time.sleep(0.05)
-    ctypes.windll.user32.keybd_event(vk_code, 0, KEYEVENTF_KEYUP, 0)
+    for i in range(1, steps + 1):
+        frac = i / steps
+        cur_x = int(x1 + (x2 - x1) * frac)
+        cur_y = int(y1 + (y2 - y1) * frac)
+        ctypes.windll.user32.SetCursorPos(cur_x, cur_y)
+        norm_x = int((cur_x - vx) * 65535 / max(1, vw - 1))
+        norm_y = int((cur_y - vy) * 65535 / max(1, vh - 1))
+        ctypes.windll.user32.mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, norm_x, norm_y, 0, 0)
+        time.sleep(max(0.005, duration / steps))
+    time.sleep(0.05)
+    send_mouse_up_at(x2, y2)
+
+
+def send_text(text):
+    for ch in text:
+        vk = ctypes.windll.user32.VkKeyScanW(ord(ch))
+        if vk != -1:
+            code = vk & 0xFF
+            shift = bool((vk >> 8) & 1)
+            if shift:
+                ctypes.windll.user32.keybd_event(0x10, 0, 0, 0)
+            ctypes.windll.user32.keybd_event(code, 0, 0, 0)
+            time.sleep(0.02)
+            ctypes.windll.user32.keybd_event(code, 0, KEYEVENTF_KEYUP, 0)
+            if shift:
+                ctypes.windll.user32.keybd_event(0x10, 0, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.02)
+
+
+def clear_text_box():
+    # Ctrl + A
+    ctypes.windll.user32.keybd_event(0x11, 0, 0, 0) # VK_CONTROL
+    ctypes.windll.user32.keybd_event(0x41, 0, 0, 0) # 'A'
+    time.sleep(0.03)
+    ctypes.windll.user32.keybd_event(0x41, 0, KEYEVENTF_KEYUP, 0)
+    ctypes.windll.user32.keybd_event(0x11, 0, KEYEVENTF_KEYUP, 0)
+    time.sleep(0.04)
+    # Backspace
+    key_tap(0x08)
+    time.sleep(0.04)
 
 
 def get_system_monitors():
@@ -831,6 +910,12 @@ class AutoFishGUI:
         self.bar_pin = None
         self.instructions_win = None
 
+        self.reequip_pins_visible = False
+        self.gear_pin = None
+        self.search_pin = None
+        self.bag_rod_pin = None
+        self.slot_pin = None
+
         # Build UI layout
         self._build_ui()
 
@@ -967,7 +1052,7 @@ class AutoFishGUI:
 
         # Row 3: Tuners (Cast Hold & Cooldown)
         row3 = tk.Frame(controls_panel, bg="#161b22")
-        row3.pack(fill="x", padx=12, pady=(4, 8))
+        row3.pack(fill="x", padx=12, pady=(4, 4))
 
         # Cast hold tuner
         cast_box = tk.Frame(row3, bg="#161b22")
@@ -986,6 +1071,36 @@ class AutoFishGUI:
         self.cd_val_lbl = tk.Label(cd_box, text=f"{self.config.get('post_catch_cooldown', 4.0):.1f}s", fg="#39d353", bg="#161b22", font=("Consolas", 9, "bold"), width=6)
         self.cd_val_lbl.pack(side="left")
         tk.Button(cd_box, text="+", bg="#21262d", fg="#fff", width=2, command=lambda: self.adjust_cooldown(+0.5)).pack(side="left")
+
+        # Row 4: Auto Re-Equip Rod (Slot 3)
+        row4 = tk.Frame(controls_panel, bg="#161b22")
+        row4.pack(fill="x", padx=12, pady=(4, 8))
+
+        self.auto_reequip_var = tk.BooleanVar(value=self.config.get("auto_reequip_enabled", True))
+        reequip_check = tk.Checkbutton(
+            row4, text="🔄 Auto Re-Equip Rod (Slot 3)",
+            variable=self.auto_reequip_var, command=self._on_auto_reequip_toggle,
+            bg="#161b22", fg="#bc8cff", selectcolor="#0d1117",
+            activebackground="#161b22", activeforeground="#bc8cff",
+            font=("Consolas", 9, "bold")
+        )
+        reequip_check.pack(side="left", padx=(0, 8))
+
+        self.btn_test_reequip = tk.Button(
+            row4, text="🧪 Test Re-Equip", bg="#21262d", fg="#e3b341",
+            activebackground="#30363d", activeforeground="#ffffff",
+            font=("Consolas", 8, "bold"), bd=1, relief="solid", padx=8, pady=2,
+            command=self.test_reequip_flow
+        )
+        self.btn_test_reequip.pack(side="left", padx=4)
+
+        self.btn_reequip_pins = tk.Button(
+            row4, text="🎒 Re-Equip Pins", bg="#21262d", fg="#bc8cff",
+            activebackground="#30363d", activeforeground="#ffffff",
+            font=("Consolas", 8, "bold"), bd=1, relief="solid", width=22,
+            command=self.toggle_reequip_pins
+        )
+        self.btn_reequip_pins.pack(side="right")
 
         # 4. Action Buttons Bar
         btn_bar = tk.Frame(self.root, bg="#0c0d10")
@@ -1224,10 +1339,38 @@ class AutoFishGUI:
         new_bar_x = left + int(w * 0.50)
         new_bar_y = top + int(h * 0.91)
 
+        is_portrait = h > w
+        if is_portrait:
+            new_gear_x = left + int(w * 0.05)
+            new_gear_y = top + int(h * 0.38)
+            new_search_x = left + int(w * 0.65)
+            new_search_y = top + int(h * 0.22)
+            new_rod_x = left + int(w * 0.45)
+            new_rod_y = top + int(h * 0.30)
+            new_slot_x = left + int(w * 0.42)
+            new_slot_y = top + int(h * 0.95)
+        else:
+            new_gear_x = left + int(w * 0.12)
+            new_gear_y = top + int(h * 0.40)
+            new_search_x = left + int(w * 0.70)
+            new_search_y = top + int(h * 0.25)
+            new_rod_x = left + int(w * 0.45)
+            new_rod_y = top + int(h * 0.38)
+            new_slot_x = left + int(w * 0.43)
+            new_slot_y = top + int(h * 0.94)
+
         self.config["cast_aim_x"] = new_aim_x
         self.config["cast_aim_y"] = new_aim_y
         self.config["calibrated_bar_x"] = new_bar_x
         self.config["calibrated_bar_y"] = new_bar_y
+        self.config["gear_tab_x"] = new_gear_x
+        self.config["gear_tab_y"] = new_gear_y
+        self.config["bag_search_x"] = new_search_x
+        self.config["bag_search_y"] = new_search_y
+        self.config["bag_rod_x"] = new_rod_x
+        self.config["bag_rod_y"] = new_rod_y
+        self.config["rod_slot_x"] = new_slot_x
+        self.config["rod_slot_y"] = new_slot_y
         save_config(self.config)
 
         self._update_aim_label()
@@ -1236,6 +1379,14 @@ class AutoFishGUI:
             self.aim_pin.update_coords(new_aim_x, new_aim_y)
         if self.bar_pin:
             self.bar_pin.update_coords(new_bar_x, new_bar_y)
+        if self.gear_pin:
+            self.gear_pin.update_coords(new_gear_x, new_gear_y)
+        if self.search_pin:
+            self.search_pin.update_coords(new_search_x, new_search_y)
+        if self.bag_rod_pin:
+            self.bag_rod_pin.update_coords(new_rod_x, new_rod_y)
+        if self.slot_pin:
+            self.slot_pin.update_coords(new_slot_x, new_slot_y)
 
         self.log(f"[PINS] Centered pins for {w}x{h} -> Water Aim: ({new_aim_x}, {new_aim_y}), Green Bar: ({new_bar_x}, {new_bar_y})", "SUCCESS")
         try:
@@ -1379,6 +1530,291 @@ class AutoFishGUI:
         except Exception:
             pass
 
+    # =========================================================================
+    # Auto Re-Equip Rod System (Slot 3)
+    # =========================================================================
+    def _on_auto_reequip_toggle(self):
+        val = self.auto_reequip_var.get()
+        self.config["auto_reequip_enabled"] = val
+        save_config(self.config)
+        status_str = "ENABLED" if val else "DISABLED"
+        self.log(f"[RE-EQUIP] Auto Re-Equip {status_str}.", "INFO")
+        try:
+            winsound.Beep(1300 if val else 800, 80)
+        except Exception:
+            pass
+
+    def _on_gear_moved(self, x, y):
+        self.config["gear_tab_x"] = int(x)
+        self.config["gear_tab_y"] = int(y)
+        save_config(self.config)
+        self.log(f"[RE-EQUIP] Gear Tab set to ({int(x)}, {int(y)})", "INFO")
+        try:
+            winsound.Beep(1200, 80)
+        except Exception:
+            pass
+
+    def _on_search_moved(self, x, y):
+        self.config["bag_search_x"] = int(x)
+        self.config["bag_search_y"] = int(y)
+        save_config(self.config)
+        self.log(f"[RE-EQUIP] Bag Search Box set to ({int(x)}, {int(y)})", "INFO")
+        try:
+            winsound.Beep(1200, 80)
+        except Exception:
+            pass
+
+    def _on_bag_rod_moved(self, x, y):
+        self.config["bag_rod_x"] = int(x)
+        self.config["bag_rod_y"] = int(y)
+        save_config(self.config)
+        self.log(f"[RE-EQUIP] Bag Rod Position set to ({int(x)}, {int(y)})", "INFO")
+        try:
+            winsound.Beep(1200, 80)
+        except Exception:
+            pass
+
+    def _on_slot_moved(self, x, y):
+        self.config["rod_slot_x"] = int(x)
+        self.config["rod_slot_y"] = int(y)
+        col = self.display.get_pixel(x, y)
+        if col:
+            self.config["rod_slot_active_color"] = list(col)
+            self.log(f"[RE-EQUIP] Rod Slot 3 locked to ({int(x)}, {int(y)}) with baseline color RGB{tuple(col)}", "SUCCESS")
+        else:
+            self.log(f"[RE-EQUIP] Rod Slot 3 set to ({int(x)}, {int(y)})", "INFO")
+        save_config(self.config)
+        try:
+            winsound.Beep(1400, 80)
+        except Exception:
+            pass
+
+    def toggle_reequip_pins(self):
+        self.reequip_pins_visible = not self.reequip_pins_visible
+        if self.reequip_pins_visible:
+            self.btn_reequip_pins.config(text="🎒 Hide Re-Equip Pins", bg="#bc8cff", fg="#0d1117")
+            # Focus Roblox and send '~' to open bag
+            if not self.config.get("use_adb", False):
+                self._send_tilde_to_roblox()
+            else:
+                self.adb.press_key(68) # KEYCODE_GRAVE
+
+            gx = self.config.get("gear_tab_x", -760)
+            gy = self.config.get("gear_tab_y", 480)
+            self.gear_pin = DraggablePin(self.root, "⚙️ GEAR TAB", gx, gy, "#58a6ff", on_moved=self._on_gear_moved)
+
+            sx = self.config.get("bag_search_x", -360)
+            sy = self.config.get("bag_search_y", 280)
+            self.search_pin = DraggablePin(self.root, "🔍 BAG SEARCH", sx, sy, "#e3b341", on_moved=self._on_search_moved)
+
+            rx = self.config.get("bag_rod_x", -570)
+            ry = self.config.get("bag_rod_y", 380)
+            self.bag_rod_pin = DraggablePin(self.root, "🎣 ROD IN BAG", rx, ry, "#ff7b72", on_moved=self._on_bag_rod_moved)
+
+            slot_x = self.config.get("rod_slot_x", -588)
+            slot_y = self.config.get("rod_slot_y", 1215)
+            self.slot_pin = DraggablePin(self.root, "🔢 ROD SLOT 3", slot_x, slot_y, "#bc8cff", on_moved=self._on_slot_moved)
+
+            self.log("[PINS] Re-Equip pins shown & Bag opened! Drag the 4 pins to calibrate:", "SUCCESS")
+            self.log("  1. ⚙️ GEAR TAB (Blue) -> Place on the Gear/Bat icon on the left.", "INFO")
+            self.log("  2. 🔍 BAG SEARCH (Yellow) -> Place on the 'search' text box.", "INFO")
+            self.log("  3. 🎣 ROD IN BAG (Orange) -> Place on the first rod item in the bag.", "INFO")
+            self.log("  4. 🔢 ROD SLOT 3 (Purple) -> Place on Hotbar Slot 3.", "INFO")
+        else:
+            self.btn_reequip_pins.config(text="🎒 Re-Equip Pins", bg="#21262d", fg="#bc8cff")
+            for pin in [self.gear_pin, self.search_pin, self.bag_rod_pin, self.slot_pin]:
+                if pin:
+                    try:
+                        pin.destroy()
+                    except Exception:
+                        pass
+            self.gear_pin = None
+            self.search_pin = None
+            self.bag_rod_pin = None
+            self.slot_pin = None
+
+            # Focus Roblox and send '~' to close bag
+            if not self.config.get("use_adb", False):
+                self.ensure_roblox_focused()
+                time.sleep(0.08)
+                key_tap(0xC0) # Close bag
+            else:
+                self.adb.press_key(68)
+            self.log("[PINS] Re-Equip pins hidden & Bag closed.", "INFO")
+
+    def check_rod_equipped(self) -> bool:
+        """
+        Verifies the rod is in Slot N by comparing the saved baseline color.
+        Only triggers a re-equip when the color difference is drastic (rod icon → egg icon swap).
+        Does NOT press any keys - purely a pixel inspection.
+        Returns True (rod OK / skip) or False (rod missing, re-equip needed).
+        """
+        if not self.config.get("auto_reequip_enabled", True):
+            return True
+
+        slot_x = self.config.get("rod_slot_x")
+        slot_y = self.config.get("rod_slot_y")
+        # Skip if pins have never been calibrated (coordinates are still at hardcoded defaults)
+        if slot_x is None or slot_y is None:
+            return True
+
+        active_col = self.config.get("rod_slot_active_color")
+        # Skip check if baseline color was never recorded (default white or missing)
+        if not active_col or active_col == [255, 255, 255]:
+            return True
+
+        # Sample pixel at rod slot location
+        cur_col = self.display.get_pixel(slot_x, slot_y)
+        if not cur_col:
+            return True  # Can't read pixel, assume ok
+
+        diff = color_diff(cur_col, active_col)
+        # Use a generous threshold: egg icons are very different colors from rod icons
+        # (rod ≈ dark blue-grey, egg ≈ pink/yellow/pastel)
+        if diff > 120:
+            self.log(f"[RE-EQUIP] Slot pixel changed drastically (diff={diff}). "
+                     f"Expected RGB{tuple(active_col)}, got RGB{tuple(cur_col)}. Rod may be displaced!", "WARN")
+            return False
+
+        return True
+
+    def _send_tilde_to_roblox(self):
+        """
+        Reliably sends the ~ / backtick key to Roblox.
+        Clicks the game viewport first to ensure keyboard focus is on the game,
+        not the chat box or any overlay, before sending VK_OEM_3 (0xC0, scan 0x29).
+        """
+        r_hwnd = self.get_roblox_hwnd()
+        if r_hwnd:
+            focus_window(r_hwnd)
+            time.sleep(0.08)
+            # Click center of game to dismiss any popups / chat focus
+            rect = wintypes.RECT()
+            ctypes.windll.user32.GetClientRect(r_hwnd, ctypes.byref(rect))
+            # Map client center to screen coords
+            pt = POINT(
+                rect.left + (rect.right - rect.left) // 2,
+                rect.top + (rect.bottom - rect.top) // 2
+            )
+            ctypes.windll.user32.ClientToScreen(r_hwnd, ctypes.byref(pt))
+            # Right-click to dismiss chat without side effects on game state
+            ctypes.windll.user32.SetCursorPos(pt.x, pt.y)
+            time.sleep(0.04)
+            # Use Escape first to close any open UI / chat bar
+            key_tap(0x1B)  # VK_ESCAPE
+            time.sleep(0.12)
+        key_tap(0xC0)  # VK_OEM_3  (~)
+
+    def execute_reequip(self) -> bool:
+        """Executes the full 6-step bag opening, gear selection, search, drag & equip sequence."""
+        use_adb = self.config.get("use_adb", False)
+        gear_x = self.config.get("gear_tab_x")
+        gear_y = self.config.get("gear_tab_y")
+        search_x = self.config.get("bag_search_x")
+        search_y = self.config.get("bag_search_y")
+        rod_x = self.config.get("bag_rod_x")
+        rod_y = self.config.get("bag_rod_y")
+        slot_x = self.config.get("rod_slot_x")
+        slot_y = self.config.get("rod_slot_y")
+        search_term = self.config.get("rod_search_term", "rod")
+        slot_num = self.config.get("rod_slot_number", 3)
+
+        if any(v is None for v in [gear_x, gear_y, search_x, search_y, rod_x, rod_y, slot_x, slot_y]):
+            self.log("[RE-EQUIP] Cannot re-equip: Coordinates not configured. Click [🎒 Re-Equip Pins] to calibrate.", "ERROR")
+            return False
+
+        self.log(">>> [RE-EQUIP] Initiating automatic rod re-equipment sequence...", "WARN")
+        self.action_card.val_lbl.config(text="Re-Equipping Rod (Slot 3)...", fg="#bc8cff")
+
+        # 1. Open Bag using ~ (Escape first to clear chat/popups, then tilde)
+        self.log("  └─ 1. Opening Bag with [~]...", "INFO")
+        if use_adb:
+            self.adb.press_key(68)  # KEYCODE_GRAVE
+            time.sleep(0.60)
+        else:
+            self._send_tilde_to_roblox()
+            time.sleep(0.70)  # Give bag animation time to fully open
+
+        # 2. Click Gear Category tab
+        self.log(f"  └─ 2. Selecting 'Gear' tab at ({gear_x}, {gear_y})...", "INFO")
+        if use_adb:
+            self.adb.tap(gear_x, gear_y)
+        else:
+            mouse_click_at(gear_x, gear_y, hold_time=0.05)
+        time.sleep(0.45)
+
+        # 3. Click Search Box & clear & type search term
+        self.log(f"  └─ 3. Filtering by '{search_term}' at ({search_x}, {search_y})...", "INFO")
+        if use_adb:
+            self.adb.tap(search_x, search_y)
+            time.sleep(0.20)
+            self.adb.clear_text(10)
+            time.sleep(0.10)
+            self.adb.send_text(search_term)
+        else:
+            mouse_click_at(search_x, search_y, hold_time=0.05)
+            time.sleep(0.20)
+            clear_text_box()
+            time.sleep(0.05)
+            send_text(search_term)
+        time.sleep(0.50)  # Wait for results to load
+
+        # 4. Drag Rod from Bag to Hotbar Slot
+        self.log(f"  └─ 4. Dragging Rod ({rod_x},{rod_y}) → Slot {slot_num} ({slot_x},{slot_y})...", "INFO")
+        if use_adb:
+            self.adb.drag(rod_x, rod_y, slot_x, slot_y, duration_ms=500)
+        else:
+            mouse_drag_at(rod_x, rod_y, slot_x, slot_y, duration=0.50, steps=25)
+        time.sleep(0.50)
+
+        # 5. Close Bag with ~
+        self.log("  └─ 5. Closing Bag with [~]...", "INFO")
+        if use_adb:
+            self.adb.press_key(68)
+            time.sleep(0.40)
+        else:
+            self._send_tilde_to_roblox()
+            time.sleep(0.50)
+
+        # 6. Press slot number key to equip in hand
+        self.log(f"  └─ 6. Equipping Rod (pressing '{slot_num}')...", "INFO")
+        if use_adb:
+            self.adb.press_key(7 + slot_num)
+        else:
+            self.ensure_roblox_focused()
+            time.sleep(0.05)
+            key_tap(0x30 + slot_num)  # 0x33 = '3'
+        time.sleep(0.30)
+
+        # Capture new baseline color for Slot N after rod is equipped
+        time.sleep(0.15)
+        new_col = self.display.get_pixel(slot_x, slot_y)
+        if new_col:
+            self.config["rod_slot_active_color"] = list(new_col)
+            save_config(self.config)
+            self.log(f"  └─ Baseline updated: Slot {slot_num} color = RGB{tuple(new_col)}", "INFO")
+
+        self.log(f">>> [RE-EQUIP] ✔ Re-equip complete! Rod back in Slot {slot_num}.", "SUCCESS")
+        try:
+            winsound.Beep(1800, 150)
+        except Exception:
+            pass
+        return True
+
+    def test_reequip_flow(self):
+        """Manual test trigger for the re-equip workflow."""
+        if self.is_running or self.test_mode:
+            self.log("[TEST] Please pause fishing before running Re-Equip test.", "WARN")
+            return
+        def worker():
+            self.btn_test_reequip.config(state="disabled", text="⏳ TESTING...")
+            try:
+                self.execute_reequip()
+            finally:
+                self.btn_test_reequip.config(state="normal", text="🧪 Test Re-Equip")
+                self.action_card.val_lbl.config(text="Idle — Ready to Start", fg="#e3b341")
+        threading.Thread(target=worker, daemon=True).start()
+
 
     # =========================================================================
     # Controls & Tuners
@@ -1390,6 +1826,8 @@ class AutoFishGUI:
                 # Automatically hide pins so they never contaminate screen pixels
                 if self.pins_visible:
                     self.toggle_pins()
+                if self.reequip_pins_visible:
+                    self.toggle_reequip_pins()
                 if self.start_time is None:
                     self.start_time = time.time()
                 self.status_badge.config(text="[ FISHING ]", fg="#2ea043", bg="#161b22")
@@ -1415,6 +1853,8 @@ class AutoFishGUI:
             # Auto-hide pins immediately on UI thread so clicks & pixel detection reach the game window
             if self.pins_visible:
                 self.toggle_pins()
+            if self.reequip_pins_visible:
+                self.toggle_reequip_pins()
             threading.Thread(target=self._run_single_test_worker, daemon=True).start()
 
     def _run_single_test_worker(self):
@@ -1543,6 +1983,24 @@ class AutoFishGUI:
             (" to start auto-fishing.\n• Press ", "BODY"),
             ("F6", "KEY"),
             (" again anytime to pause.\n\n", "BODY"),
+
+            ("STEP 6: AUTO RE-EQUIP ROD (SLOT 3)", "HEADER"),
+            ("\n• When your hotbar fills up with caught eggs, Roblox pushes your fishing rod into your backpack.\n• Check ", "BODY"),
+            ("[✔] Auto Re-Equip Rod (Slot 3)", "STEP"),
+            (" to keep fishing forever unattended!\n• Click ", "BODY"),
+            ("[ 🎒 Re-Equip Pins ]", "KEY"),
+            (" to open the game bag and calibrate the 4 pins:\n", "BODY"),
+            ("   1. ⚙️ GEAR TAB (Blue):", "STEP"),
+            (" Place on the Gear/Bat icon on the bag's left sidebar.\n", "BODY"),
+            ("   2. 🔍 BAG SEARCH (Yellow):", "STEP"),
+            (" Place on the bag's 'search' text box.\n", "BODY"),
+            ("   3. 🎣 ROD IN BAG (Orange):", "STEP"),
+            (" Place on the first rod item in the bag.\n", "BODY"),
+            ("   4. 🔢 ROD SLOT 3 (Purple):", "STEP"),
+            (" Place on Hotbar Slot 3.\n", "BODY"),
+            ("• Click ", "BODY"),
+            ("[ 🧪 Test Re-Equip ]", "KEY"),
+            (" anytime to test the automated bag opening, search, and swap sequence.\n\n", "BODY"),
 
             ("SHORTCUT HOTKEYS", "HEADER"),
             ("\n• ", "BODY"),
@@ -1711,6 +2169,14 @@ class AutoFishGUI:
         cast_time = self.config.get("cast_hold_duration", 1.05)
         self.total_casts += 1
 
+        # Check if rod is equipped in slot 3 before casting
+        if self.config.get("auto_reequip_enabled", True):
+            if not self.check_rod_equipped():
+                self.log("[RE-EQUIP] Rod appears missing or displaced from Slot 3! Initiating auto re-equip...", "WARN")
+                self.execute_reequip()
+                if not self.is_running and not self.test_mode:
+                    return
+
         # ---------------------------------------------------------------------
         # 1. CASTING INTO WATER
         # ---------------------------------------------------------------------
@@ -1785,6 +2251,10 @@ class AutoFishGUI:
 
         if not bite_detected:
             self.log(f"  └─ No bite detected ({wait_dur:.1f}s timeout). Recasting...", "WARN")
+            if self.config.get("auto_reequip_enabled", True):
+                if not self.check_rod_equipped():
+                    self.log("[RE-EQUIP] Rod appears to have been displaced! Re-equipping now...", "WARN")
+                    self.execute_reequip()
             human_sleep(1.0, jitter)
             return
 
@@ -1915,6 +2385,13 @@ class AutoFishGUI:
             self.aim_pin.destroy()
         if self.bar_pin:
             self.bar_pin.destroy()
+        if self.reequip_pins_visible:
+            for pin in [self.gear_pin, self.search_pin, self.bag_rod_pin, self.slot_pin]:
+                if pin:
+                    try:
+                        pin.destroy()
+                    except Exception:
+                        pass
         if hasattr(self, "instructions_win") and self.instructions_win:
             try:
                 self.instructions_win.destroy()

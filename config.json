@@ -6,14 +6,14 @@
   "adb_reel_x": 640,
   "adb_reel_y": 420,
   "screen_selection": "\ud83d\udd0d Auto-Detect Screen (Roblox)",
-  "cast_aim_x": 657,
-  "cast_aim_y": 202,
-  "calibrated_bar_x": 606,
-  "calibrated_bar_y": 629,
+  "cast_aim_x": -510,
+  "cast_aim_y": 246,
+  "calibrated_bar_x": -587,
+  "calibrated_bar_y": 560,
   "calibrated_color": [
-    56,
+    57,
     192,
-    84
+    79
   ],
   "cast_hold_duration": 1.05,
   "min_wait_before_bite": 1.8,
@@ -25,6 +25,22 @@
   "jitter_amount": 0.015,
   "anti_afk_enabled": true,
   "anti_afk_interval_seconds": 120,
+  "auto_reequip_enabled": true,
+  "rod_slot_number": 3,
+  "rod_search_term": "rod",
+  "gear_tab_x": -928,
+  "gear_tab_y": 389,
+  "bag_search_x": -318,
+  "bag_search_y": 251,
+  "bag_rod_x": -603,
+  "bag_rod_y": 421,
+  "rod_slot_x": -720,
+  "rod_slot_y": 579,
+  "rod_slot_active_color": [
+    90,
+    39,
+    51
+  ],
   "hotkeys": {
     "toggle": "F6",
     "decrease_cast": "F1",
@@ -35,8 +51,8 @@
     "increase_cooldown": "F10",
     "exit": "F8"
   },
-  "detected_screen_width": 1366,
-  "detected_screen_height": 768,
-  "detected_screen_orientation": "Landscape",
-  "detected_screen_device": "\\\\.\\DISPLAY2"
+  "detected_screen_width": 1024,
+  "detected_screen_height": 1280,
+  "detected_screen_orientation": "Portrait",
+  "detected_screen_device": "\\\\.\\DISPLAY1"
 }
