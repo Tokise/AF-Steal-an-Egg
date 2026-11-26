@@ -169,6 +169,8 @@ DEFAULT_CONFIG = {
     "auto_reequip_enabled": True,
     "rod_slot_number": 3,
     "rod_search_term": "rod",
+    "bag_icon_x": None,
+    "bag_icon_y": None,
     "gear_tab_x": -760,
     "gear_tab_y": 480,
     "bag_search_x": -360,
@@ -723,44 +725,67 @@ def key_tap(vk_code, hold_time=0.06, extended=False):
     _send_key_scancode(vk_code, key_up=True, extended=extended)
 
 
-def mouse_drag_at(x1, y1, x2, y2, duration=0.25, steps=15):
-    move_flags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+def _send_mouse_raw(flags, dx=0, dy=0):
+    try:
+        inp = INPUT()
+        inp.type = 0
+        inp.mi.dx = int(dx)
+        inp.mi.dy = int(dy)
+        inp.mi.dwFlags = flags
+        sent = ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        if sent:
+            return
+    except Exception:
+        pass
+    ctypes.windll.user32.mouse_event(flags, int(dx), int(dy), 0, 0)
 
-    # Hover over source item first so Roblox UI registers the drag target
-    _send_mouse_event(move_flags, x1, y1, use_set_cursor=True)
+
+def mouse_drag_at(x1, y1, x2, y2, duration=0.55, steps=30):
+    move_abs = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+
+    # 1. Move to source item and hover so Roblox UI registers the drag target
+    _send_mouse_event(move_abs, x1, y1, use_set_cursor=True)
     time.sleep(0.12)
-    _send_mouse_event(MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, x1, y1, use_set_cursor=False)
+
+    # 2. Pure LEFTDOWN (no ABSOLUTE) so Roblox starts dragging
+    _send_mouse_raw(MOUSEEVENTF_LEFTDOWN)
     time.sleep(0.15)
 
-    # Pure SendInput moves (no SetCursorPos) so Roblox receives real mouse-move deltas
+    # 3. Relative MOUSEEVENTF_MOVE deltas (what Roblox UI drag detector tracks)
+    prev_x, prev_y = int(x1), int(y1)
     for i in range(1, steps + 1):
         frac = i / steps
-        cur_x = int(x1 + (x2 - x1) * frac)
-        cur_y = int(y1 + (y2 - y1) * frac)
-        _send_mouse_event(move_flags, cur_x, cur_y, use_set_cursor=False)
-        time.sleep(max(0.008, duration / steps))
+        cur_x = int(round(x1 + (x2 - x1) * frac))
+        cur_y = int(round(y1 + (y2 - y1) * frac))
+        dx = cur_x - prev_x
+        dy = cur_y - prev_y
+        if dx != 0 or dy != 0:
+            _send_mouse_raw(MOUSEEVENTF_MOVE, dx, dy)
+            prev_x, prev_y = cur_x, cur_y
+        time.sleep(max(0.010, duration / steps))
 
-    # Pause over destination slot before releasing so Roblox registers the drop
+    # 4. Pause over destination slot before releasing so Roblox registers the drop
     time.sleep(0.15)
-    _send_mouse_event(MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, x2, y2, use_set_cursor=False)
+    _send_mouse_raw(MOUSEEVENTF_LEFTUP)
 
 
 def send_text(text):
+    """Types text into Roblox TextBoxes using KEYEVENTF_UNICODE (WM_CHAR)."""
     for ch in text:
-        vk = ctypes.windll.user32.VkKeyScanW(ord(ch))
-        if vk != -1:
-            code = vk & 0xFF
-            shift = bool((vk >> 8) & 1)
-            if shift:
-                _send_key_scancode(0x10, key_up=False)
-                time.sleep(0.02)
-            _send_key_scancode(code, key_up=False)
-            time.sleep(0.03)
-            _send_key_scancode(code, key_up=True)
-            if shift:
-                time.sleep(0.02)
-                _send_key_scancode(0x10, key_up=True)
-            time.sleep(0.03)
+        code = ord(ch)
+        for flags in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP):
+            try:
+                inp = INPUT()
+                inp.type = 1  # INPUT_KEYBOARD
+                inp.ki.wVk = 0
+                inp.ki.wScan = code
+                inp.ki.dwFlags = flags
+                inp.ki.time = 0
+                inp.ki.dwExtraInfo = 0
+                ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+            except Exception:
+                pass
+            time.sleep(0.025)
 
 
 def clear_text_box():
@@ -938,6 +963,7 @@ class AutoFishGUI:
         self.instructions_win = None
 
         self.reequip_pins_visible = False
+        self.bag_icon_pin = None
         self.gear_pin = None
         self.search_pin = None
         self.bag_rod_pin = None
@@ -1390,6 +1416,10 @@ class AutoFishGUI:
         self.config["cast_aim_y"] = new_aim_y
         self.config["calibrated_bar_x"] = new_bar_x
         self.config["calibrated_bar_y"] = new_bar_y
+        new_bag_x = left + int(w * 0.22)
+        new_bag_y = top + 28
+        self.config["bag_icon_x"] = new_bag_x
+        self.config["bag_icon_y"] = new_bag_y
         self.config["gear_tab_x"] = new_gear_x
         self.config["gear_tab_y"] = new_gear_y
         self.config["bag_search_x"] = new_search_x
@@ -1406,6 +1436,8 @@ class AutoFishGUI:
             self.aim_pin.update_coords(new_aim_x, new_aim_y)
         if self.bar_pin:
             self.bar_pin.update_coords(new_bar_x, new_bar_y)
+        if self.bag_icon_pin:
+            self.bag_icon_pin.update_coords(new_bag_x, new_bag_y)
         if self.gear_pin:
             self.gear_pin.update_coords(new_gear_x, new_gear_y)
         if self.search_pin:
@@ -1617,6 +1649,16 @@ class AutoFishGUI:
             samples.append(list(col) if col else None)
         return samples
 
+    def _on_bag_icon_moved(self, x, y):
+        self.config["bag_icon_x"] = int(x)
+        self.config["bag_icon_y"] = int(y)
+        save_config(self.config)
+        self.log(f"[RE-EQUIP] Bag Icon set to ({int(x)}, {int(y)})", "INFO")
+        try:
+            winsound.Beep(1200, 80)
+        except Exception:
+            pass
+
     def _on_slot_moved(self, x, y):
         self.config["rod_slot_x"] = int(x)
         self.config["rod_slot_y"] = int(y)
@@ -1645,6 +1687,14 @@ class AutoFishGUI:
             else:
                 self.adb.press_key(68) # KEYCODE_GRAVE
 
+            bx = self.config.get("bag_icon_x")
+            by = self.config.get("bag_icon_y")
+            if bx is None or by is None:
+                mon = getattr(self, "active_monitor", None)
+                bx = (mon["left"] + int(mon["width"] * 0.22)) if mon else -798
+                by = (mon["top"] + 28) if mon else 36
+            self.bag_icon_pin = DraggablePin(self.root, "🎒 BAG ICON", bx, by, "#39c5cf", on_moved=self._on_bag_icon_moved)
+
             gx = self.config.get("gear_tab_x", -760)
             gy = self.config.get("gear_tab_y", 480)
             self.gear_pin = DraggablePin(self.root, "⚙️ GEAR TAB", gx, gy, "#58a6ff", on_moved=self._on_gear_moved)
@@ -1661,19 +1711,21 @@ class AutoFishGUI:
             slot_y = self.config.get("rod_slot_y", 1215)
             self.slot_pin = DraggablePin(self.root, "🔢 ROD SLOT 3", slot_x, slot_y, "#bc8cff", on_moved=self._on_slot_moved)
 
-            self.log("[PINS] Re-Equip pins shown & Bag opened! Drag the 4 pins to calibrate:", "SUCCESS")
-            self.log("  1. ⚙️ GEAR TAB (Blue) -> Place on the Gear/Bat icon on the left.", "INFO")
-            self.log("  2. 🔍 BAG SEARCH (Yellow) -> Place on the 'search' text box.", "INFO")
-            self.log("  3. 🎣 ROD IN BAG (Orange) -> Place on the first rod item in the bag.", "INFO")
-            self.log("  4. 🔢 ROD SLOT 3 (Purple) -> Place on Hotbar Slot 3.", "INFO")
+            self.log("[PINS] Re-Equip pins shown! Drag the 5 pins to calibrate:", "SUCCESS")
+            self.log("  1. 🎒 BAG ICON (Cyan) -> Place on the Backpack icon at the top-left of Roblox.", "INFO")
+            self.log("  2. ⚙️ GEAR TAB (Blue) -> Place on the Gear/Bat icon on the left.", "INFO")
+            self.log("  3. 🔍 BAG SEARCH (Yellow) -> Place on the 'search' text box.", "INFO")
+            self.log("  4. 🎣 ROD IN BAG (Orange) -> Place on the first rod item in the bag.", "INFO")
+            self.log("  5. 🔢 ROD SLOT 3 (Purple) -> Place on Hotbar Slot 3.", "INFO")
         else:
             self.btn_reequip_pins.config(text="🎒 Re-Equip Pins", bg="#21262d", fg="#bc8cff")
-            for pin in [self.gear_pin, self.search_pin, self.bag_rod_pin, self.slot_pin]:
+            for pin in [self.bag_icon_pin, self.gear_pin, self.search_pin, self.bag_rod_pin, self.slot_pin]:
                 if pin:
                     try:
                         pin.destroy()
                     except Exception:
                         pass
+            self.bag_icon_pin = None
             self.gear_pin = None
             self.search_pin = None
             self.bag_rod_pin = None
@@ -1801,11 +1853,19 @@ class AutoFishGUI:
                 time.sleep(0.12)
 
         # ── 1. Open Bag ───────────────────────────────────────────────────────
-        self.log("  └─ 1. Opening bag [~]...", "INFO")
+        bag_x = self.config.get("bag_icon_x")
+        bag_y = self.config.get("bag_icon_y")
         if use_adb:
+            self.log("  └─ 1. Opening bag [~]...", "INFO")
             self.adb.press_key(68)   # KEYCODE_GRAVE
             time.sleep(0.75)
+        elif bag_x is not None and bag_y is not None:
+            self.log(f"  └─ 1. Clicking Bag icon → ({bag_x}, {bag_y})...", "INFO")
+            focus_game()
+            mouse_click_at(bag_x, bag_y, hold_time=0.08)
+            time.sleep(0.85)
         else:
+            self.log("  └─ 1. Opening bag [~]...", "INFO")
             self._send_tilde_to_roblox()
             time.sleep(0.85)         # Wait for bag open animation
 
@@ -1845,11 +1905,17 @@ class AutoFishGUI:
         time.sleep(0.45)
 
         # ── 5. Close Bag ──────────────────────────────────────────────────────
-        self.log("  └─ 5. Closing bag [~]...", "INFO")
         if use_adb:
+            self.log("  └─ 5. Closing bag [~]...", "INFO")
             self.adb.press_key(68)
             time.sleep(0.45)
+        elif bag_x is not None and bag_y is not None:
+            self.log(f"  └─ 5. Closing bag via icon ({bag_x}, {bag_y})...", "INFO")
+            focus_game()
+            mouse_click_at(bag_x, bag_y, hold_time=0.08)
+            time.sleep(0.55)
         else:
+            self.log("  └─ 5. Closing bag [~]...", "INFO")
             self._send_tilde_to_roblox()
             time.sleep(0.55)
 
@@ -2461,7 +2527,7 @@ class AutoFishGUI:
         if self.bar_pin:
             self.bar_pin.destroy()
         if self.reequip_pins_visible:
-            for pin in [self.gear_pin, self.search_pin, self.bag_rod_pin, self.slot_pin]:
+            for pin in [self.bag_icon_pin, self.gear_pin, self.search_pin, self.bag_rod_pin, self.slot_pin]:
                 if pin:
                     try:
                         pin.destroy()
