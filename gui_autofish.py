@@ -166,6 +166,7 @@ DEFAULT_CONFIG = {
     "rod_slot_x": -588,
     "rod_slot_y": 1215,
     "rod_slot_active_color": [255, 255, 255],
+    "rod_slot_active_colors": [],
     "hotkeys": {
         "toggle": "F6",
         "decrease_cast": "F1",
@@ -625,7 +626,7 @@ def human_sleep(duration, jitter=0.015):
     return actual_delay
 
 
-def send_mouse_down_at(x, y):
+def _send_mouse_event(flags, x, y):
     vx = ctypes.windll.user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
     vy = ctypes.windll.user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
     vw = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CXVIRTUALSCREEN))
@@ -634,7 +635,6 @@ def send_mouse_down_at(x, y):
     ctypes.windll.user32.SetCursorPos(int(x), int(y))
     norm_x = int((int(x) - vx) * 65535 / max(1, vw - 1))
     norm_y = int((int(y) - vy) * 65535 / max(1, vh - 1))
-    flags = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
 
     try:
         inp = INPUT()
@@ -642,33 +642,20 @@ def send_mouse_down_at(x, y):
         inp.mi.dx = norm_x
         inp.mi.dy = norm_y
         inp.mi.dwFlags = flags
-        ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        sent = ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        if sent:
+            return
     except Exception:
         pass
     ctypes.windll.user32.mouse_event(flags, norm_x, norm_y, 0, 0)
+
+
+def send_mouse_down_at(x, y):
+    _send_mouse_event(MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, x, y)
 
 
 def send_mouse_up_at(x, y):
-    vx = ctypes.windll.user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
-    vy = ctypes.windll.user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
-    vw = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CXVIRTUALSCREEN))
-    vh = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
-
-    ctypes.windll.user32.SetCursorPos(int(x), int(y))
-    norm_x = int((int(x) - vx) * 65535 / max(1, vw - 1))
-    norm_y = int((int(y) - vy) * 65535 / max(1, vh - 1))
-    flags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
-
-    try:
-        inp = INPUT()
-        inp.type = 0
-        inp.mi.dx = norm_x
-        inp.mi.dy = norm_y
-        inp.mi.dwFlags = flags
-        ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
-    except Exception:
-        pass
-    ctypes.windll.user32.mouse_event(flags, norm_x, norm_y, 0, 0)
+    _send_mouse_event(MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, x, y)
 
 
 def mouse_click_at(x, y, hold_time=0.02):
@@ -701,23 +688,23 @@ def key_tap(vk_code):
 
 
 def mouse_drag_at(x1, y1, x2, y2, duration=0.25, steps=15):
-    vx = ctypes.windll.user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
-    vy = ctypes.windll.user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
-    vw = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CXVIRTUALSCREEN))
-    vh = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
+    move_flags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
 
+    # Hover over source item first so Roblox UI registers the drag target
+    _send_mouse_event(move_flags, x1, y1)
+    time.sleep(0.08)
     send_mouse_down_at(x1, y1)
-    time.sleep(0.05)
+    time.sleep(0.10)
+
     for i in range(1, steps + 1):
         frac = i / steps
         cur_x = int(x1 + (x2 - x1) * frac)
         cur_y = int(y1 + (y2 - y1) * frac)
-        ctypes.windll.user32.SetCursorPos(cur_x, cur_y)
-        norm_x = int((cur_x - vx) * 65535 / max(1, vw - 1))
-        norm_y = int((cur_y - vy) * 65535 / max(1, vh - 1))
-        ctypes.windll.user32.mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, norm_x, norm_y, 0, 0)
+        _send_mouse_event(move_flags, cur_x, cur_y)
         time.sleep(max(0.005, duration / steps))
-    time.sleep(0.05)
+
+    # Pause over destination slot before releasing so Roblox registers the drop
+    time.sleep(0.10)
     send_mouse_up_at(x2, y2)
 
 
@@ -726,27 +713,33 @@ def send_text(text):
         vk = ctypes.windll.user32.VkKeyScanW(ord(ch))
         if vk != -1:
             code = vk & 0xFF
+            scan = ctypes.windll.user32.MapVirtualKeyW(code, 0)
             shift = bool((vk >> 8) & 1)
+            shift_scan = ctypes.windll.user32.MapVirtualKeyW(0x10, 0) if shift else 0
             if shift:
-                ctypes.windll.user32.keybd_event(0x10, 0, 0, 0)
-            ctypes.windll.user32.keybd_event(code, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(0x10, shift_scan, 0, 0)
+            ctypes.windll.user32.keybd_event(code, scan, 0, 0)
             time.sleep(0.02)
-            ctypes.windll.user32.keybd_event(code, 0, KEYEVENTF_KEYUP, 0)
+            ctypes.windll.user32.keybd_event(code, scan, KEYEVENTF_KEYUP, 0)
             if shift:
-                ctypes.windll.user32.keybd_event(0x10, 0, KEYEVENTF_KEYUP, 0)
+                ctypes.windll.user32.keybd_event(0x10, shift_scan, KEYEVENTF_KEYUP, 0)
             time.sleep(0.02)
 
 
 def clear_text_box():
+    ctrl_scan = ctypes.windll.user32.MapVirtualKeyW(0x11, 0)
+    a_scan = ctypes.windll.user32.MapVirtualKeyW(0x41, 0)
     # Ctrl + A
-    ctypes.windll.user32.keybd_event(0x11, 0, 0, 0) # VK_CONTROL
-    ctypes.windll.user32.keybd_event(0x41, 0, 0, 0) # 'A'
+    ctypes.windll.user32.keybd_event(0x11, ctrl_scan, 0, 0)  # VK_CONTROL
+    ctypes.windll.user32.keybd_event(0x41, a_scan, 0, 0)     # 'A'
     time.sleep(0.03)
-    ctypes.windll.user32.keybd_event(0x41, 0, KEYEVENTF_KEYUP, 0)
-    ctypes.windll.user32.keybd_event(0x11, 0, KEYEVENTF_KEYUP, 0)
+    ctypes.windll.user32.keybd_event(0x41, a_scan, KEYEVENTF_KEYUP, 0)
+    ctypes.windll.user32.keybd_event(0x11, ctrl_scan, KEYEVENTF_KEYUP, 0)
     time.sleep(0.04)
-    # Backspace
+    # Backspace + Delete
     key_tap(0x08)
+    time.sleep(0.03)
+    key_tap(0x2E)
     time.sleep(0.04)
 
 
@@ -1574,13 +1567,32 @@ class AutoFishGUI:
         except Exception:
             pass
 
+    def _set_action_status(self, text, fg="#e3b341"):
+        """Thread-safe update for the Current Action status card."""
+        try:
+            self.root.after(0, lambda t=text, c=fg: self.action_card.val_lbl.config(text=t, fg=c))
+        except Exception:
+            pass
+
+    def _sample_slot_cross(self, slot_x, slot_y):
+        """Samples a 5-point cross around (slot_x, slot_y) for resilient icon comparison."""
+        offsets = [(0, 0), (-8, 0), (8, 0), (0, -8), (0, 8)]
+        samples = []
+        for dx, dy in offsets:
+            col = self.display.get_pixel(slot_x + dx, slot_y + dy)
+            samples.append(list(col) if col else None)
+        return samples
+
     def _on_slot_moved(self, x, y):
         self.config["rod_slot_x"] = int(x)
         self.config["rod_slot_y"] = int(y)
         col = self.display.get_pixel(x, y)
+        samples = self._sample_slot_cross(x, y)
         if col:
             self.config["rod_slot_active_color"] = list(col)
-            self.log(f"[RE-EQUIP] Rod Slot 3 locked to ({int(x)}, {int(y)}) with baseline color RGB{tuple(col)}", "SUCCESS")
+            if all(s is not None for s in samples):
+                self.config["rod_slot_active_colors"] = samples
+            self.log(f"[RE-EQUIP] Rod Slot 3 locked to ({int(x)}, {int(y)}) with baseline RGB{tuple(col)}", "SUCCESS")
         else:
             self.log(f"[RE-EQUIP] Rod Slot 3 set to ({int(x)}, {int(y)})", "INFO")
         save_config(self.config)
@@ -1642,13 +1654,34 @@ class AutoFishGUI:
                 self.adb.press_key(68)
             self.log("[PINS] Re-Equip pins hidden & Bag closed.", "INFO")
 
+    def _is_slot_displaced(self, slot_x, slot_y, active_colors):
+        """Returns (displaced: bool, changed_count: int, max_diff: int) for a 5-point cross."""
+        cur_samples = self._sample_slot_cross(slot_x, slot_y)
+        changed = 0
+        max_diff = 0
+        valid = 0
+        for cur, base in zip(cur_samples, active_colors):
+            if cur is None or base is None:
+                continue
+            valid += 1
+            d = color_diff(cur, base)
+            if d > max_diff:
+                max_diff = d
+            if d > 110:
+                changed += 1
+        if valid == 0:
+            return False, 0, 0
+        # Require at least 3 of 5 points (majority) to change drastically
+        needed = min(3, max(1, (valid + 1) // 2))
+        return changed >= needed, changed, max_diff
+
     def check_rod_equipped(self) -> bool:
         """
-        Verifies the rod is in Slot N by comparing a saved baseline color.
-        On the FIRST call (baseline = white/unset), auto-captures the current pixel
-        as the rod baseline — assumes the rod IS equipped when fishing starts.
+        Verifies the rod is in Slot N by comparing a 5-point cross baseline.
+        On first use, auto-captures the 5-point baseline.
+        Uses majority voting (>= 3/5 points shifted > 110) + a 0.35s confirmation
+        re-check to prevent random false positives from weather/lighting/popups.
         Returns True (rod OK) or False (rod missing, re-equip needed).
-        Does NOT press any keys — purely pixel inspection.
         """
         if not self.config.get("auto_reequip_enabled", True):
             return True
@@ -1658,36 +1691,41 @@ class AutoFishGUI:
         if slot_x is None or slot_y is None:
             return True
 
-        # Sample the current pixel at rod slot
-        cur_col = self.display.get_pixel(slot_x, slot_y)
-        if not cur_col:
-            return True  # Can't read pixel, assume ok
-
         active_col = self.config.get("rod_slot_active_color")
+        active_colors = self.config.get("rod_slot_active_colors") or []
 
-        # ── Auto-capture baseline on first use ──────────────────────────────
-        # If baseline is still the factory default (white), capture it NOW.
-        # This moment is BEFORE the first cast, so the rod must be in hand.
-        if not active_col or active_col == [255, 255, 255]:
-            self.config["rod_slot_active_color"] = list(cur_col)
+        # Auto-capture 5-point baseline if unset or upgrading from legacy single-pixel config
+        if not active_col or active_col == [255, 255, 255] or len(active_colors) != 5:
+            samples = self._sample_slot_cross(slot_x, slot_y)
+            if not samples[0]:
+                return True
+            self.config["rod_slot_active_color"] = samples[0]
+            if all(s is not None for s in samples):
+                self.config["rod_slot_active_colors"] = samples
             save_config(self.config)
             self.log(
-                f"[RE-EQUIP] 📸 Auto-captured rod baseline: Slot ({slot_x},{slot_y}) = RGB{tuple(cur_col)}",
+                f"[RE-EQUIP] 📸 Captured 5-pt rod baseline at ({slot_x},{slot_y}) = RGB{tuple(samples[0])}",
                 "SUCCESS"
             )
-            return True  # We just set the baseline — rod is definitely there right now
+            return True
 
-        diff = color_diff(cur_col, active_col)
-        # Threshold 100: rod icon vs egg icon color difference is typically 150–250 in RGB sum
-        if diff > 100:
-            self.log(
-                f"[RE-EQUIP] ⚠ Slot color changed! diff={diff} "
-                f"(baseline RGB{tuple(active_col)} → current RGB{tuple(cur_col)}). Rod displaced!",
-                "WARN"
-            )
-            return False
+        displaced, changed, max_diff = self._is_slot_displaced(slot_x, slot_y, active_colors)
+        if not displaced:
+            return True
 
-        return True
+        # Confirmation re-check after 0.35s to filter transient overlays/lighting flashes
+        time.sleep(0.35)
+        if not self.is_running and not self.test_mode:
+            return True
+        displaced2, changed2, max_diff2 = self._is_slot_displaced(slot_x, slot_y, active_colors)
+        if not displaced2:
+            return True
+
+        self.log(
+            f"[RE-EQUIP] ⚠ Rod slot confirmed changed ({changed2}/5 pts, max_diff={max_diff2}). Rod displaced!",
+            "WARN"
+        )
+        return False
 
     def _send_tilde_to_roblox(self):
         """
@@ -1725,7 +1763,7 @@ class AutoFishGUI:
             return False
 
         self.log(">>> [RE-EQUIP] Starting rod re-equip sequence...", "WARN")
-        self.action_card.val_lbl.config(text="Re-Equipping Rod...", fg="#bc8cff")
+        self._set_action_status("Re-Equipping Rod...", "#bc8cff")
 
         r_hwnd = self.get_roblox_hwnd()
 
@@ -1739,10 +1777,10 @@ class AutoFishGUI:
         self.log("  └─ 1. Opening bag [~]...", "INFO")
         if use_adb:
             self.adb.press_key(68)   # KEYCODE_GRAVE
-            time.sleep(0.80)
+            time.sleep(0.75)
         else:
             self._send_tilde_to_roblox()
-            time.sleep(0.90)         # Wait for bag open animation
+            time.sleep(0.85)         # Wait for bag open animation
 
         # ── 2. Click Gear tab ─────────────────────────────────────────────────
         self.log(f"  └─ 2. Gear tab → ({gear_x}, {gear_y})...", "INFO")
@@ -1751,7 +1789,7 @@ class AutoFishGUI:
         else:
             focus_game()
             mouse_click_at(gear_x, gear_y, hold_time=0.08)
-        time.sleep(0.50)
+        time.sleep(0.45)
 
         # ── 3. Search for rod ─────────────────────────────────────────────────
         self.log(f"  └─ 3. Search '{search_term}' at ({search_x}, {search_y})...", "INFO")
@@ -1765,17 +1803,10 @@ class AutoFishGUI:
             focus_game()
             mouse_click_at(search_x, search_y, hold_time=0.08)
             time.sleep(0.25)
-            # Select all and delete existing text, then type
-            ctypes.windll.user32.keybd_event(0x11, 0, 0, 0)   # Ctrl down
-            ctypes.windll.user32.keybd_event(0x41, 0, 0, 0)   # A
-            time.sleep(0.03)
-            ctypes.windll.user32.keybd_event(0x41, 0, KEYEVENTF_KEYUP, 0)
-            ctypes.windll.user32.keybd_event(0x11, 0, KEYEVENTF_KEYUP, 0)
-            time.sleep(0.03)
-            key_tap(0x2E)  # Delete
+            clear_text_box()
             time.sleep(0.05)
             send_text(search_term)
-        time.sleep(0.60)  # Wait for results
+        time.sleep(0.55)  # Wait for results
 
         # ── 4. Drag Rod → Slot ────────────────────────────────────────────────
         self.log(f"  └─ 4. Drag rod ({rod_x},{rod_y}) → slot {slot_num} ({slot_x},{slot_y})...", "INFO")
@@ -1784,16 +1815,16 @@ class AutoFishGUI:
         else:
             focus_game()
             mouse_drag_at(rod_x, rod_y, slot_x, slot_y, duration=0.60, steps=30)
-        time.sleep(0.50)
+        time.sleep(0.45)
 
         # ── 5. Close Bag ──────────────────────────────────────────────────────
         self.log("  └─ 5. Closing bag [~]...", "INFO")
         if use_adb:
             self.adb.press_key(68)
-            time.sleep(0.50)
+            time.sleep(0.45)
         else:
             self._send_tilde_to_roblox()
-            time.sleep(0.60)
+            time.sleep(0.55)
 
         # ── 6. Press slot key to equip ────────────────────────────────────────
         self.log(f"  └─ 6. Pressing '{slot_num}' to equip rod...", "INFO")
@@ -1804,13 +1835,18 @@ class AutoFishGUI:
             key_tap(0x30 + slot_num)   # 0x31='1' … 0x33='3'
         time.sleep(0.35)
 
-        # ── 7. Update baseline color ──────────────────────────────────────────
-        time.sleep(0.20)
-        new_col = self.display.get_pixel(slot_x, slot_y)
-        if new_col:
-            self.config["rod_slot_active_color"] = list(new_col)
-            save_config(self.config)
-            self.log(f"  └─ Baseline updated: Slot {slot_num} = RGB{tuple(new_col)}", "INFO")
+        # ── 7. Only capture baseline if never calibrated (never overwrite good baseline) ──
+        existing_col = self.config.get("rod_slot_active_color")
+        existing_cross = self.config.get("rod_slot_active_colors") or []
+        if not existing_col or existing_col == [255, 255, 255] or len(existing_cross) != 5:
+            time.sleep(0.15)
+            samples = self._sample_slot_cross(slot_x, slot_y)
+            if samples[0]:
+                self.config["rod_slot_active_color"] = samples[0]
+                if all(s is not None for s in samples):
+                    self.config["rod_slot_active_colors"] = samples
+                save_config(self.config)
+                self.log(f"  └─ Baseline captured: Slot {slot_num} = RGB{tuple(samples[0])}", "INFO")
 
         self.log(f">>> [RE-EQUIP] ✔ Rod back in Slot {slot_num}!", "SUCCESS")
         try:
@@ -1825,12 +1861,12 @@ class AutoFishGUI:
             self.log("[TEST] Please pause fishing before running Re-Equip test.", "WARN")
             return
         def worker():
-            self.btn_test_reequip.config(state="disabled", text="⏳ TESTING...")
+            self.root.after(0, lambda: self.btn_test_reequip.config(state="disabled", text="⏳ TESTING..."))
             try:
                 self.execute_reequip()
             finally:
-                self.btn_test_reequip.config(state="normal", text="🧪 Test Re-Equip")
-                self.action_card.val_lbl.config(text="Idle — Ready to Start", fg="#e3b341")
+                self.root.after(0, lambda: self.btn_test_reequip.config(state="normal", text="🧪 Test Re-Equip"))
+                self._set_action_status("Idle — Ready to Start", "#e3b341")
         threading.Thread(target=worker, daemon=True).start()
 
 
@@ -2201,7 +2237,7 @@ class AutoFishGUI:
         if use_adb:
             adb_x = self.config.get("adb_cast_x", 640)
             adb_y = self.config.get("adb_cast_y", 420)
-            self.action_card.val_lbl.config(text=f"Holding Rod ({cast_time:.2f}s)...", fg="#e3b341")
+            self._set_action_status(f"Holding Rod ({cast_time:.2f}s)...", "#e3b341")
             self.log(f"▶ Cast #{self.total_casts}: [⚡ Monkey Hold] Holding rod for {cast_time:.2f}s at ({adb_x}, {adb_y})...", "INFO")
             
             self.adb.cast_hold(adb_x, adb_y, duration=cast_time)
@@ -2209,7 +2245,7 @@ class AutoFishGUI:
         else:
             aim_x = self.config.get("cast_aim_x", 960)
             aim_y = self.config.get("cast_aim_y", 540)
-            self.action_card.val_lbl.config(text=f"Casting ({cast_time:.2f}s hold)...", fg="#e3b341")
+            self._set_action_status(f"Casting ({cast_time:.2f}s hold)...", "#e3b341")
             self.log(f"▶ Cast #{self.total_casts}: Holding rod for {cast_time:.2f}s at ({aim_x}, {aim_y})...", "INFO")
 
             r_hwnd = self.get_roblox_hwnd()
@@ -2234,7 +2270,7 @@ class AutoFishGUI:
         # ---------------------------------------------------------------------
         # 2. BUFFER DELAY & BASELINE LOCK (Let bobber land in water)
         # ---------------------------------------------------------------------
-        self.action_card.val_lbl.config(text=f"Line landing in water ({min_buffer:.1f}s)...", fg="#58a6ff")
+        self._set_action_status(f"Line landing in water ({min_buffer:.1f}s)...", "#58a6ff")
         time.sleep(min_buffer)
 
         # ---------------------------------------------------------------------
@@ -2242,7 +2278,7 @@ class AutoFishGUI:
         # ---------------------------------------------------------------------
         calib_x = self.config.get("calibrated_bar_x", 960)
         calib_y = self.config.get("calibrated_bar_y", 720)
-        self.action_card.val_lbl.config(text="Waiting for fish bite (Green Bar)...", fg="#39d353")
+        self._set_action_status("Waiting for fish bite (Green Bar)...", "#39d353")
         self.log(f"  └─ Line in water! Waiting for green bar to appear (random 3-12s)...", "INFO")
 
         # Establish baseline colors across the detection strip right after line lands
@@ -2291,14 +2327,14 @@ class AutoFishGUI:
         if use_adb:
             adb_reel_x = self.config.get("adb_reel_x", 640)
             adb_reel_y = self.config.get("adb_reel_y", 420)
-            self.action_card.val_lbl.config(text=f"TURBO Reeling ({click_count} taps)...", fg="#e3b341")
+            self._set_action_status(f"TURBO Reeling ({click_count} taps)...", "#e3b341")
             self.log(f"  └─ [⚡ Monkey Turbo] Rapid tapping {click_count} times (<0.5s)...", "INFO")
             self.adb.rapid_tap(adb_reel_x, adb_reel_y, count=click_count, interval=0.020)
             self.log("  └─ [⚡ Monkey Turbo] Reeling complete!", "SUCCESS")
         else:
             aim_x = self.config.get("cast_aim_x", 960)
             aim_y = self.config.get("cast_aim_y", 540)
-            self.action_card.val_lbl.config(text=f"Reeling ({click_count} clicks)...", fg="#e3b341")
+            self._set_action_status(f"Reeling ({click_count} clicks)...", "#e3b341")
             self.log(f"  └─ Reeling in with {click_count} rapid clicks at ({aim_x}, {aim_y})...", "INFO")
 
             r_hwnd = self.get_roblox_hwnd()
@@ -2315,7 +2351,8 @@ class AutoFishGUI:
             self.log(f"  └─ Reeling complete ({click_count} clicks executed)!", "SUCCESS")
 
         self.total_catches += 1
-        self.catches_card.val_lbl.config(text=str(self.total_catches))
+        catches_str = str(self.total_catches)
+        self.root.after(0, lambda s=catches_str: self.catches_card.val_lbl.config(text=s))
         self.log(f"  └─ Catch #{self.total_catches} secured!", "SUCCESS")
 
         if not self.is_running and not self.test_mode:
@@ -2325,7 +2362,7 @@ class AutoFishGUI:
         # 5. REWARD POPUP COOLDOWN
         # ---------------------------------------------------------------------
         cooldown = self.config.get("post_catch_cooldown", 4.0)
-        self.action_card.val_lbl.config(text=f"Reward popup clearing ({cooldown:.1f}s)...", fg="#58a6ff")
+        self._set_action_status(f"Reward popup clearing ({cooldown:.1f}s)...", "#58a6ff")
         self.log(f"  └─ Waiting {cooldown:.1f}s for reward popup to clear...", "INFO")
 
         elapsed = 0.0
