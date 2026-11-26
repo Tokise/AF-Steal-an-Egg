@@ -67,7 +67,10 @@ MOUSEEVENTF_LEFTDOWN    = 0x0002
 MOUSEEVENTF_LEFTUP      = 0x0004
 MOUSEEVENTF_ABSOLUTE    = 0x8000
 MOUSEEVENTF_VIRTUALDESK = 0x4000
+KEYEVENTF_EXTENDEDKEY   = 0x0001
 KEYEVENTF_KEYUP         = 0x0002
+KEYEVENTF_UNICODE       = 0x0004
+KEYEVENTF_SCANCODE      = 0x0008
 VK_SPACE                = 0x20
 GA_ROOT                 = 2
 
@@ -88,8 +91,17 @@ class MOUSEINPUT(ctypes.Structure):
         ("dwExtraInfo", ULONG_PTR)
     ]
 
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR)
+    ]
+
 class _INPUT_UNION(ctypes.Union):
-    _fields_ = [("mi", MOUSEINPUT)]
+    _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT)]
 
 class INPUT(ctypes.Structure):
     _anonymous_ = ("_u",)
@@ -681,11 +693,34 @@ def mouse_click(hold_time=0.02):
     mouse_click_at(x, y, hold_time=hold_time)
 
 
-def key_tap(vk_code):
+def _send_key_scancode(vk_code, key_up=False, extended=False):
     scan = ctypes.windll.user32.MapVirtualKeyW(vk_code, 0)
-    ctypes.windll.user32.keybd_event(vk_code, scan, 0, 0)
-    time.sleep(0.06)
-    ctypes.windll.user32.keybd_event(vk_code, scan, KEYEVENTF_KEYUP, 0)
+    flags = KEYEVENTF_SCANCODE
+    if extended:
+        flags |= KEYEVENTF_EXTENDEDKEY
+    if key_up:
+        flags |= KEYEVENTF_KEYUP
+    try:
+        inp = INPUT()
+        inp.type = 1  # INPUT_KEYBOARD
+        inp.ki.wVk = 0
+        inp.ki.wScan = scan
+        inp.ki.dwFlags = flags
+        inp.ki.time = 0
+        inp.ki.dwExtraInfo = 0
+        sent = ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        if sent:
+            return
+    except Exception:
+        pass
+    fb_flags = KEYEVENTF_KEYUP if key_up else 0
+    ctypes.windll.user32.keybd_event(vk_code, scan, fb_flags, 0)
+
+
+def key_tap(vk_code, hold_time=0.06, extended=False):
+    _send_key_scancode(vk_code, key_up=False, extended=extended)
+    time.sleep(hold_time)
+    _send_key_scancode(vk_code, key_up=True, extended=extended)
 
 
 def mouse_drag_at(x1, y1, x2, y2, duration=0.25, steps=15):
@@ -715,33 +750,30 @@ def send_text(text):
         vk = ctypes.windll.user32.VkKeyScanW(ord(ch))
         if vk != -1:
             code = vk & 0xFF
-            scan = ctypes.windll.user32.MapVirtualKeyW(code, 0)
             shift = bool((vk >> 8) & 1)
-            shift_scan = ctypes.windll.user32.MapVirtualKeyW(0x10, 0) if shift else 0
             if shift:
-                ctypes.windll.user32.keybd_event(0x10, shift_scan, 0, 0)
-            ctypes.windll.user32.keybd_event(code, scan, 0, 0)
-            time.sleep(0.02)
-            ctypes.windll.user32.keybd_event(code, scan, KEYEVENTF_KEYUP, 0)
+                _send_key_scancode(0x10, key_up=False)
+                time.sleep(0.02)
+            _send_key_scancode(code, key_up=False)
+            time.sleep(0.03)
+            _send_key_scancode(code, key_up=True)
             if shift:
-                ctypes.windll.user32.keybd_event(0x10, shift_scan, KEYEVENTF_KEYUP, 0)
-            time.sleep(0.02)
+                time.sleep(0.02)
+                _send_key_scancode(0x10, key_up=True)
+            time.sleep(0.03)
 
 
 def clear_text_box():
-    ctrl_scan = ctypes.windll.user32.MapVirtualKeyW(0x11, 0)
-    a_scan = ctypes.windll.user32.MapVirtualKeyW(0x41, 0)
-    # Ctrl + A
-    ctypes.windll.user32.keybd_event(0x11, ctrl_scan, 0, 0)  # VK_CONTROL
-    ctypes.windll.user32.keybd_event(0x41, a_scan, 0, 0)     # 'A'
+    # Ctrl + A using hardware scancodes
+    _send_key_scancode(0x11, key_up=False)  # VK_CONTROL
+    time.sleep(0.02)
+    _send_key_scancode(0x41, key_up=False)  # 'A'
     time.sleep(0.03)
-    ctypes.windll.user32.keybd_event(0x41, a_scan, KEYEVENTF_KEYUP, 0)
-    ctypes.windll.user32.keybd_event(0x11, ctrl_scan, KEYEVENTF_KEYUP, 0)
+    _send_key_scancode(0x41, key_up=True)
+    _send_key_scancode(0x11, key_up=True)
     time.sleep(0.04)
-    # Backspace + Delete
-    key_tap(0x08)
-    time.sleep(0.03)
-    key_tap(0x2E)
+    # Backspace
+    key_tap(0x08, hold_time=0.04)
     time.sleep(0.04)
 
 
@@ -1731,20 +1763,13 @@ class AutoFishGUI:
 
     def _send_tilde_to_roblox(self):
         """
-        Reliably sends the ~ key to open/close the bag in Roblox.
-        Brings Roblox to the foreground and uses PostMessage so the key
-        reaches the game even if another window steals focus mid-sequence.
-        VK_OEM_3 = 0xC0, scan code = 0x29.
+        Reliably sends the ` / ~ key (VK_OEM_3, scan 0x29) to Roblox via SendInput.
         """
         r_hwnd = self.get_roblox_hwnd()
         if r_hwnd:
             focus_window(r_hwnd)
-            time.sleep(0.10)
-        scan = ctypes.windll.user32.MapVirtualKeyW(0xC0, 0)  # → 0x29
-        # Use both keybd_event AND PostMessage for maximum reliability
-        ctypes.windll.user32.keybd_event(0xC0, scan, 0, 0)
-        time.sleep(0.05)
-        ctypes.windll.user32.keybd_event(0xC0, scan, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.12)
+        key_tap(0xC0, hold_time=0.07)
 
     def execute_reequip(self) -> bool:
         """Executes the full bag-open → gear tab → search → drag → close → equip sequence."""
