@@ -626,13 +626,14 @@ def human_sleep(duration, jitter=0.015):
     return actual_delay
 
 
-def _send_mouse_event(flags, x, y):
+def _send_mouse_event(flags, x, y, use_set_cursor=True):
     vx = ctypes.windll.user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
     vy = ctypes.windll.user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
     vw = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CXVIRTUALSCREEN))
     vh = max(1, ctypes.windll.user32.GetSystemMetrics(SM_CYVIRTUALSCREEN))
 
-    ctypes.windll.user32.SetCursorPos(int(x), int(y))
+    if use_set_cursor:
+        ctypes.windll.user32.SetCursorPos(int(x), int(y))
     norm_x = int((int(x) - vx) * 65535 / max(1, vw - 1))
     norm_y = int((int(y) - vy) * 65535 / max(1, vh - 1))
 
@@ -651,11 +652,11 @@ def _send_mouse_event(flags, x, y):
 
 
 def send_mouse_down_at(x, y):
-    _send_mouse_event(MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, x, y)
+    _send_mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, x, y)
 
 
 def send_mouse_up_at(x, y):
-    _send_mouse_event(MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, x, y)
+    _send_mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, x, y)
 
 
 def mouse_click_at(x, y, hold_time=0.02):
@@ -691,21 +692,22 @@ def mouse_drag_at(x1, y1, x2, y2, duration=0.25, steps=15):
     move_flags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
 
     # Hover over source item first so Roblox UI registers the drag target
-    _send_mouse_event(move_flags, x1, y1)
-    time.sleep(0.08)
-    send_mouse_down_at(x1, y1)
-    time.sleep(0.10)
+    _send_mouse_event(move_flags, x1, y1, use_set_cursor=True)
+    time.sleep(0.12)
+    _send_mouse_event(MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, x1, y1, use_set_cursor=False)
+    time.sleep(0.15)
 
+    # Pure SendInput moves (no SetCursorPos) so Roblox receives real mouse-move deltas
     for i in range(1, steps + 1):
         frac = i / steps
         cur_x = int(x1 + (x2 - x1) * frac)
         cur_y = int(y1 + (y2 - y1) * frac)
-        _send_mouse_event(move_flags, cur_x, cur_y)
-        time.sleep(max(0.005, duration / steps))
+        _send_mouse_event(move_flags, cur_x, cur_y, use_set_cursor=False)
+        time.sleep(max(0.008, duration / steps))
 
     # Pause over destination slot before releasing so Roblox registers the drop
-    time.sleep(0.10)
-    send_mouse_up_at(x2, y2)
+    time.sleep(0.15)
+    _send_mouse_event(MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, x2, y2, use_set_cursor=False)
 
 
 def send_text(text):
