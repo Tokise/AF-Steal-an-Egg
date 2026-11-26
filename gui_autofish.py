@@ -2223,14 +2223,6 @@ class AutoFishGUI:
         cast_time = self.config.get("cast_hold_duration", 1.05)
         self.total_casts += 1
 
-        # Check if rod is equipped in slot 3 before casting
-        if self.config.get("auto_reequip_enabled", True):
-            if not self.check_rod_equipped():
-                self.log("[RE-EQUIP] Rod appears missing or displaced from Slot 3! Initiating auto re-equip...", "WARN")
-                self.execute_reequip()
-                if not self.is_running and not self.test_mode:
-                    return
-
         # ---------------------------------------------------------------------
         # 1. CASTING INTO WATER
         # ---------------------------------------------------------------------
@@ -2304,11 +2296,12 @@ class AutoFishGUI:
         wait_dur = time.time() - watch_start
 
         if not bite_detected:
-            self.log(f"  └─ No bite detected ({wait_dur:.1f}s timeout). Recasting...", "WARN")
+            self.log(f"  └─ No bite detected ({wait_dur:.1f}s timeout).", "WARN")
             if self.config.get("auto_reequip_enabled", True):
-                if not self.check_rod_equipped():
-                    self.log("[RE-EQUIP] Rod appears to have been displaced! Re-equipping now...", "WARN")
-                    self.execute_reequip()
+                self.log("[RE-EQUIP] Hotbar full / rod missing (no bite). Re-equipping rod to Slot 3...", "WARN")
+                self.execute_reequip()
+            else:
+                self.log("  └─ Recasting...", "INFO")
             human_sleep(1.0, jitter)
             return
 
