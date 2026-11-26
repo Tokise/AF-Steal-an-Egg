@@ -8,12 +8,12 @@
   "screen_selection": "\ud83d\udd0d Auto-Detect Screen (Roblox)",
   "cast_aim_x": -510,
   "cast_aim_y": 246,
-  "calibrated_bar_x": -587,
-  "calibrated_bar_y": 560,
+  "calibrated_bar_x": -578,
+  "calibrated_bar_y": 554,
   "calibrated_color": [
-    57,
-    192,
-    79
+    58,
+    193,
+    88
   ],
   "cast_hold_duration": 1.05,
   "min_wait_before_bite": 1.8,
@@ -28,18 +28,18 @@
   "auto_reequip_enabled": true,
   "rod_slot_number": 3,
   "rod_search_term": "rod",
-  "gear_tab_x": -928,
-  "gear_tab_y": 389,
+  "gear_tab_x": -923,
+  "gear_tab_y": 387,
   "bag_search_x": -318,
   "bag_search_y": 251,
-  "bag_rod_x": -603,
-  "bag_rod_y": 421,
-  "rod_slot_x": -720,
-  "rod_slot_y": 579,
+  "bag_rod_x": -619,
+  "bag_rod_y": 328,
+  "rod_slot_x": -723,
+  "rod_slot_y": 576,
   "rod_slot_active_color": [
-    90,
-    39,
-    51
+    147,
+    63,
+    221
   ],
   "hotkeys": {
     "toggle": "F6",
@@ -54,5 +54,34 @@
   "detected_screen_width": 1024,
   "detected_screen_height": 1280,
   "detected_screen_orientation": "Portrait",
-  "detected_screen_device": "\\\\.\\DISPLAY1"
+  "detected_screen_device": "\\\\.\\DISPLAY1",
+  "rod_slot_active_colors": [
+    [
+      147,
+      63,
+      221
+    ],
+    [
+      210,
+      132,
+      253
+    ],
+    [
+      129,
+      52,
+      206
+    ],
+    [
+      118,
+      48,
+      195
+    ],
+    [
+      177,
+      86,
+      243
+    ]
+  ],
+  "bag_icon_x": -818,
+  "bag_icon_y": 46
 }

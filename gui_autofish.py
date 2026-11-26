@@ -503,22 +503,14 @@ def focus_window(hwnd):
         if ctypes.windll.user32.IsIconic(hwnd):
             ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
 
-        cur_thread = ctypes.windll.user32.GetWindowThreadProcessId(cur_fg, None)
-        target_thread = ctypes.windll.user32.GetWindowThreadProcessId(hwnd, None)
-        my_thread = ctypes.windll.kernel32.GetCurrentThreadId()
-
-        for t in (cur_thread, my_thread):
-            if t != target_thread and t != 0:
-                ctypes.windll.user32.AttachThreadInput(t, target_thread, True)
-
+        # Press and release ALT to grant foreground activation privilege
+        ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
         ctypes.windll.user32.ShowWindow(hwnd, 5)  # SW_SHOW
         ctypes.windll.user32.BringWindowToTop(hwnd)
         ctypes.windll.user32.SetForegroundWindow(hwnd)
+        ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
 
-        for t in (cur_thread, my_thread):
-            if t != target_thread and t != 0:
-                ctypes.windll.user32.AttachThreadInput(t, target_thread, False)
-
+        time.sleep(0.08)
         return ctypes.windll.user32.GetForegroundWindow() == hwnd
     except Exception:
         return False
@@ -665,34 +657,70 @@ def _send_mouse_event(flags, x, y, use_set_cursor=True):
     ctypes.windll.user32.mouse_event(flags, norm_x, norm_y, 0, 0)
 
 
+def _mouse_down_raw():
+    try:
+        inp = INPUT()
+        inp.type = 0
+        inp.mi.dx = 0
+        inp.mi.dy = 0
+        inp.mi.dwFlags = MOUSEEVENTF_LEFTDOWN
+        sent = ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        if sent:
+            return
+    except Exception:
+        pass
+    ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+
+
+def _mouse_up_raw():
+    try:
+        inp = INPUT()
+        inp.type = 0
+        inp.mi.dx = 0
+        inp.mi.dy = 0
+        inp.mi.dwFlags = MOUSEEVENTF_LEFTUP
+        sent = ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        if sent:
+            return
+    except Exception:
+        pass
+    ctypes.windll.user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+
 def send_mouse_down_at(x, y):
-    _send_mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, x, y)
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
+    time.sleep(0.04)
+    _mouse_down_raw()
 
 
 def send_mouse_up_at(x, y):
-    _send_mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, x, y)
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
+    _mouse_up_raw()
 
 
-def mouse_click_at(x, y, hold_time=0.02):
-    send_mouse_down_at(x, y)
+def mouse_click_at(x, y, hold_time=0.08):
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
+    time.sleep(0.06)  # Crucial: let Roblox register hover/MouseEnter
+    _mouse_down_raw()
     if hold_time > 0:
         time.sleep(hold_time)
-    send_mouse_up_at(x, y)
+    _mouse_up_raw()
+    time.sleep(0.04)
 
 
 def mouse_down():
-    x, y = get_cursor_pos()
-    send_mouse_down_at(x, y)
+    _mouse_down_raw()
 
 
 def mouse_up():
-    x, y = get_cursor_pos()
-    send_mouse_up_at(x, y)
+    _mouse_up_raw()
 
 
-def mouse_click(hold_time=0.02):
-    x, y = get_cursor_pos()
-    mouse_click_at(x, y, hold_time=hold_time)
+def mouse_click(hold_time=0.08):
+    _mouse_down_raw()
+    if hold_time > 0:
+        time.sleep(hold_time)
+    _mouse_up_raw()
 
 
 def _send_key_scancode(vk_code, key_up=False, extended=False):
@@ -705,7 +733,7 @@ def _send_key_scancode(vk_code, key_up=False, extended=False):
     try:
         inp = INPUT()
         inp.type = 1  # INPUT_KEYBOARD
-        inp.ki.wVk = 0
+        inp.ki.wVk = vk_code
         inp.ki.wScan = scan
         inp.ki.dwFlags = flags
         inp.ki.time = 0
@@ -740,66 +768,47 @@ def _send_mouse_raw(flags, dx=0, dy=0):
     ctypes.windll.user32.mouse_event(flags, int(dx), int(dy), 0, 0)
 
 
-def mouse_drag_at(x1, y1, x2, y2, duration=0.55, steps=30):
-    move_abs = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
-
+def mouse_drag_at(x1, y1, x2, y2, duration=0.60, steps=30):
     # 1. Move to source item and hover so Roblox UI registers the drag target
-    _send_mouse_event(move_abs, x1, y1, use_set_cursor=True)
+    ctypes.windll.user32.SetCursorPos(int(x1), int(y1))
     time.sleep(0.12)
 
-    # 2. Pure LEFTDOWN (no ABSOLUTE) so Roblox starts dragging
-    _send_mouse_raw(MOUSEEVENTF_LEFTDOWN)
+    # 2. Left down to begin drag
+    _mouse_down_raw()
     time.sleep(0.15)
 
-    # 3. Relative MOUSEEVENTF_MOVE deltas (what Roblox UI drag detector tracks)
+    # 3. Smooth relative moves
     prev_x, prev_y = int(x1), int(y1)
     for i in range(1, steps + 1):
         frac = i / steps
         cur_x = int(round(x1 + (x2 - x1) * frac))
         cur_y = int(round(y1 + (y2 - y1) * frac))
+        ctypes.windll.user32.SetCursorPos(cur_x, cur_y)
         dx = cur_x - prev_x
         dy = cur_y - prev_y
-        if dx != 0 or dy != 0:
-            _send_mouse_raw(MOUSEEVENTF_MOVE, dx, dy)
-            prev_x, prev_y = cur_x, cur_y
+        _send_mouse_raw(MOUSEEVENTF_MOVE, dx, dy)
+        prev_x, prev_y = cur_x, cur_y
         time.sleep(max(0.010, duration / steps))
 
-    # 4. Pause over destination slot before releasing so Roblox registers the drop
-    time.sleep(0.15)
-    _send_mouse_raw(MOUSEEVENTF_LEFTUP)
+    # 4. Pause over destination slot before releasing so Roblox registers drop
+    time.sleep(0.18)
+    _mouse_up_raw()
+    time.sleep(0.08)
 
 
 def send_text(text):
-    """Types text into Roblox TextBoxes using KEYEVENTF_UNICODE (WM_CHAR)."""
+    """Types text into Roblox TextBoxes using virtual keys + scan codes."""
     for ch in text:
-        code = ord(ch)
-        for flags in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP):
-            try:
-                inp = INPUT()
-                inp.type = 1  # INPUT_KEYBOARD
-                inp.ki.wVk = 0
-                inp.ki.wScan = code
-                inp.ki.dwFlags = flags
-                inp.ki.time = 0
-                inp.ki.dwExtraInfo = 0
-                ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
-            except Exception:
-                pass
-            time.sleep(0.025)
+        vk = ord(ch.upper()) if ch.isalpha() else ord(ch)
+        key_tap(vk, hold_time=0.04)
+        time.sleep(0.06)
 
 
 def clear_text_box():
-    # Ctrl + A using hardware scancodes
-    _send_key_scancode(0x11, key_up=False)  # VK_CONTROL
-    time.sleep(0.02)
-    _send_key_scancode(0x41, key_up=False)  # 'A'
-    time.sleep(0.03)
-    _send_key_scancode(0x41, key_up=True)
-    _send_key_scancode(0x11, key_up=True)
-    time.sleep(0.04)
-    # Backspace
-    key_tap(0x08, hold_time=0.04)
-    time.sleep(0.04)
+    # Tap Backspace 12 times to cleanly wipe any pre-existing text
+    for _ in range(12):
+        key_tap(0x08, hold_time=0.03)  # VK_BACK
+        time.sleep(0.02)
 
 
 def get_system_monitors():
